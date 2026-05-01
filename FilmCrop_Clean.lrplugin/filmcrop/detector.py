@@ -8,6 +8,7 @@ All image analysis, frame detection, and boundary computation lives here.
 import math
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 from PIL import Image
@@ -35,50 +36,157 @@ def _load_image_array(path: str) -> np.ndarray:
     return arr
 
 
-def find_boundaries(arr, expected_frames, size, mode="valley"):
-    """Locate frame-gap centres near theoretical positions."""
-    pstep = size / expected_frames
-    diffstep = max(10, int(pstep * 0.45))
-    boundaries = [0]
-    tol = 0.005
-    for f in range(1, expected_frames):
-        pc_min = max(0, int(f * pstep - diffstep))
-        pc_max = min(size, int(f * pstep + diffstep))
-        if pc_max <= pc_min:
-            boundaries.append(int(f * pstep))
-            continue
-        sub = arr[pc_min:pc_max]
-        pos = int(np.argmax(sub)) if mode == "peak" else int(np.argmin(sub))
+def _find_local_peaks(signal, mode="peak"):
+    """Find all local maxima (or minima for valley mode) in a 1D signal.
 
+    Returns a list of indices where the signal has a local extremum.
+    These are points that are strictly higher (peak) or lower (valley)
+    than both of their immediate neighbours.
+    """
+    n = len(signal)
+    peaks = []
+    for i in range(1, n - 1):
         if mode == "peak":
-            ls = pos
-            while ls > 0 and sub[ls] >= sub[pos] - tol:
-                ls -= 1
-            rs = pos
-            while rs < len(sub) - 1 and sub[rs] >= sub[pos] - tol:
-                rs += 1
+            if signal[i] > signal[i - 1] and signal[i] > signal[i + 1]:
+                peaks.append(i)
         else:
-            ls = pos
-            while ls > 0 and sub[ls] <= sub[pos] + tol:
-                ls -= 1
-            rs = pos
-            while rs < len(sub) - 1 and sub[rs] <= sub[pos] + tol:
-                rs += 1
-        tol_pos = (ls + rs) // 2
-        max_shift = 15
-        shift = max(-max_shift, min(max_shift, tol_pos - pos))
-        pos = pos + shift
+            if signal[i] < signal[i - 1] and signal[i] < signal[i + 1]:
+                peaks.append(i)
+    return peaks
 
-        boundary_pos = pc_min + pos
+
+def _local_contrast(signal, idx, mode="peak", radius=120):
+    """Score a local peak/valley by blending absolute brightness with prominence.
+
+    Absolute brightness (signal value) is the primary cue for gap detection:
+    film gaps are the brightest (peak) or darkest (valley) features in the
+    projection.  Prominence (peak − local baseline) breaks ties when two
+    peaks have similar brightness.  The 0.25 blending factor gives prominence
+    enough weight to suppress frame-content artefacts without letting it
+    override genuinely brighter gap candidates.
+
+    Returns a dimensionless score where higher = more gap-like.
+    """
+    val = float(signal[idx])
+    left_baseline = float(np.min(signal[max(0, idx - radius):idx + 1]))
+    right_baseline = float(np.min(signal[idx:min(len(signal), idx + radius + 1)]))
+    baseline = max(left_baseline, right_baseline)
+    if mode == "peak":
+        prominence = val - baseline
+        return val * (1.0 + prominence * 0.25)
+    else:
+        prominence = baseline - val
+        return (1.0 - val) * (1.0 + prominence * 0.25)
+
+
+def find_boundaries(arr, expected_frames, size, mode="valley"):
+    """Locate frame-gap centres by matching local extrema to expected positions.
+
+    Unlike the previous global-argmax-in-a-huge-window approach, this first
+    enumerates *all* local maxima / minima in the smoothed projection, then
+    picks the strongest one within a moderate window around each theoretical
+    boundary position.  Fallback to a narrow argmax window when no local
+    peak is found nearby.
+    """
+    pstep = size / expected_frames
+    # Search half-window: ±25% of a frame distance (was ±45%)
+    search_half = max(10, int(pstep * 0.25))
+    # Fallback window (used when no local peak is found nearby)
+    fallback_half = max(10, int(pstep * 0.15))
+
+    all_peaks = _find_local_peaks(arr, mode)
+
+    boundaries = [0]
+    for f in range(1, expected_frames):
+        center = int(f * pstep)
+        s0 = max(0, center - search_half)
+        s1 = min(size, center + search_half + 1)
+
+        if s1 <= s0:
+            boundaries.append(center)
+            continue
+
+        # 1) Local-peak matching: pick the strongest peak near the expected position
+        candidates = [p for p in all_peaks if s0 <= p <= s1]
+        if candidates:
+            # Combined score: _local_contrast × distance weight.
+            # Distance weight is a Gaussian centred on the expected position
+            # so peaks closer to the theoretical boundary are preferred.
+            sigma = pstep * 0.20
+            best_peak = max(
+                candidates,
+                key=lambda p: _local_contrast(arr, p, mode)
+                * math.exp(-0.5 * ((p - center) / sigma) ** 2),
+            )
+            boundary_pos = min(best_peak, size - 1)
+            if boundary_pos <= boundaries[-1]:
+                boundary_pos = boundaries[-1] + 1
+            boundaries.append(boundary_pos)
+            continue
+
+        # 2) Narrow-window argmax fallback (was ±45%, now ±15% of pstep)
+        fs0 = max(0, center - fallback_half)
+        fs1 = min(size, center + fallback_half + 1)
+        if fs1 <= fs0:
+            boundaries.append(center)
+            continue
+        sub = arr[fs0:fs1]
+        pos = int(np.argmax(sub)) if mode == "peak" else int(np.argmin(sub))
+        boundary_pos = fs0 + pos
         if boundary_pos <= boundaries[-1]:
             boundary_pos = boundaries[-1] + 1
-        boundaries.append(boundary_pos)
+        boundaries.append(min(boundary_pos, size - 1))
+
     boundaries.append(size)
     return boundaries
 
 
+def _enforce_boundary_consistency(boundaries, all_peaks, size, expected_frames):
+    """Nudge boundaries toward even spacing while staying on local peaks.
+
+    Each boundary is independently detected by ``find_boundaries``, which
+    can produce uneven pitches when a bright frame-content feature is
+    mistaken for a gap.  This pass adjusts each boundary toward the position
+    implied by ``median_pitch × frame_index``, but only if a local peak
+    exists within ``±12 %`` of the current pitch.
+    """
+    if len(boundaries) < 4:
+        return boundaries
+    pitches = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
+    median_pitch = float(np.median(pitches))
+    peak_set = sorted(all_peaks)  # sorted for deterministic iteration
+    search_range = max(20, int(median_pitch * 0.12))
+    for i in range(1, len(boundaries) - 1):
+        prev = boundaries[i - 1]
+        ideal = prev + median_pitch
+        current = boundaries[i]
+        best = current
+        best_dist = abs(current - ideal)
+        # Scan local peaks within search_range of the ideal position
+        lo = max(prev + 1, ideal - search_range)
+        hi = min(size - 1, ideal + search_range)
+        for p in peak_set:
+            if lo <= p <= hi:
+                d = abs(p - ideal)
+                if d < best_dist:
+                    best_dist = d
+                    best = p
+        boundaries[i] = best
+    # Restore monotonicity
+    for i in range(1, len(boundaries)):
+        if boundaries[i] <= boundaries[i - 1]:
+            boundaries[i] = boundaries[i - 1] + 1
+    return boundaries
+
+
 def refine_boundaries(boundaries, arr, expected_frames, size):
-    """Drop weakest boundaries if we have too many."""
+    """Drop weakest boundaries if we have too many.
+
+    NOTE: with the current pipeline (find_boundaries → _enforce_boundary_consistency)
+    the boundary count always equals expected_frames + 1, so this function is
+    effectively a no-op.  Kept as a safety net in case a future change introduces
+    extra boundaries.
+    """
     if len(boundaries) <= expected_frames + 1:
         return boundaries
     depths = []
@@ -157,12 +265,16 @@ def estimate_rotation(arr, expected_frames, width, height, is_horizontal=True, m
 
 
 def gap_edges_from_boundaries(arr, boundaries, expected_frames, size, mode="valley", cleanup_scale=0.5):
-    """Convert boundary centres into (left_edge, right_edge) gap pairs."""
+    """Convert boundary centres into (left_edge, right_edge) gap pairs.
+
+    Uses gradient-based edge detection: from each boundary centre, walk left
+    and right tracking the maximum gradient.  The gap edges are placed at the
+    steepest transition points — no arbitrary percentile threshold needed.
+    """
     pstep = size / expected_frames
-    search_r = max(20, int(pstep * 0.35))
-    max_gap = int(pstep * 0.45)
+    search_r = max(50, int(pstep * 0.06))
+    max_gap = int(pstep * 0.12)
     min_hw = max(2, int(pstep * 0.002))
-    max_hw = int(pstep * 0.06)
 
     gap_edges = []
     prev = 0
@@ -171,36 +283,100 @@ def gap_edges_from_boundaries(arr, boundaries, expected_frames, size, mode="vall
         s1 = min(size, b + search_r)
         sub = arr[s0:s1]
 
-        lo = float(np.percentile(sub, 10))
-        hi = float(np.percentile(sub, 90))
-        contrast = hi - lo
-        if contrast < 0.03:
-            gap_edges.append((b, b))
-            prev = b
-            continue
-
-        th = (lo + hi) / 2.0
-        if mode == "peak":
-            is_gap = sub > th
-        else:
-            is_gap = sub < th
-
         b_rel = b - s0
-        left = b_rel
-        while left > 0 and is_gap[left - 1]:
-            left -= 1
-        right = b_rel
-        while right < len(sub) - 1 and is_gap[right + 1]:
-            right += 1
+        grad = np.abs(np.diff(sub.astype(np.float64)))
 
-        if (left == 0 or right == len(sub) - 1) and (right - left + 1) > max_gap:
-            gap_edges.append((b, b))
-            prev = b
+        # Dynamic gradient floor: 30 % of the 85th-percentile gradient in the
+        # search window.  Lower bound of 1e-4 avoids stalling on ultra-low-
+        # contrast scans (e.g. thin-base film where frame content and gap have
+        # very similar brightness).
+        noise_floor = float(np.percentile(grad, 85))
+        grad_threshold = max(noise_floor * 0.30, 0.0001)
+
+        # ---- gradient-based edge detection ----------------------------------
+        def _find_edge(from_idx, step):
+            """Walk *step* (-1 left, +1 right) from *from_idx*, tracking the
+            maximum gradient.  Stop when the gradient falls below 30 % of the
+            maximum seen (we've left the transition zone).  Return the position
+            of the steepest gradient + 1 (gap-edge pixel index in *sub*)."""
+            max_g = 0.0
+            best = from_idx
+            i = from_idx + step
+            min_steps = 3  # walk at least a few pixels before stopping
+            steps_taken = 0
+            seen_transition = False  # at least one gradient ≥ threshold
+            while 0 <= i < len(grad):
+                g = grad[i]
+                steps_taken += 1
+                if g > max_g:
+                    max_g = g
+                    best = i
+                if g >= grad_threshold:
+                    seen_transition = True
+                # Stop when gradient has decayed well below the peak
+                if steps_taken >= min_steps and max_g > 0 and g < max_g * 0.30:
+                    break
+                # Absolute stop: only allowed after we've crossed a genuine
+                # transition (gradient ≥ threshold).  Prevents premature
+                # stopping on ultra-low-contrast scans.
+                if seen_transition and g < grad_threshold and steps_taken >= min_steps:
+                    break
+                i += step
+            return best + 1  # grad[k] is between sub[k] and sub[k+1]
+
+        left = _find_edge(b_rel, -1)
+        right = _find_edge(b_rel, +1)
+
+        # Sanity: clamp so edges don't cross the centre or each other
+        left = min(left, b_rel)
+        right = max(right, b_rel + 1)
+
+        gap_width = right - left
+
+        # ---- edge-case handling (mirrors original) --------------------------
+        if left == 0 or right >= len(sub):
+            # Gradient search hit the search-window boundary.
+            if gap_width > max_gap:
+                gap_edges.append((b, b))
+                prev = b
+                continue
+            # Conservative fallback with the same soft floor as the normal path
+            hw = max(min_hw * 2, int(pstep * 0.006))
+            le = max(prev + 1, b - hw)
+            re = max(le + 1, b + hw)
+            gap_edges.append((le, re))
+            prev = re
             continue
 
-        hw = min(b_rel - left, right - b_rel)
-        hw = int(hw * cleanup_scale)
-        hw = max(min_hw, min(max_hw, hw))
+        # ---- local gradient polish (narrow ±8 px search) --------------------
+        local_r = 8
+
+        def _refine_edge(idx, direction):
+            if direction == -1:
+                start = max(0, idx - local_r)
+                end = min(len(grad), idx)
+            else:
+                start = max(0, idx)
+                end = min(len(grad), idx + local_r)
+            if end <= start:
+                return idx
+            sub_grad = grad[start:end]
+            offset = int(np.argmax(sub_grad))
+            return start + offset + 1
+
+        refined_left = _refine_edge(left, -1)
+        refined_right = _refine_edge(right, +1)
+        refined_left = min(refined_left, b_rel)
+        refined_right = max(refined_right, b_rel)
+
+        # ---- compute final gap edges ----------------------------------------
+        min_dist = min(b_rel - refined_left, refined_right - b_rel)
+        hw = int(min_dist * cleanup_scale)
+        # Soft floor – ensure ~3 px visibility in a typical Lightroom
+        # thumbnail (long edge ≈ 1 500 px).  pstep * 0.006 ≈ 0.6 % of a
+        # frame height, which maps to ≈ 3 thumbnail pixels.
+        soft_floor = max(min_hw * 2, int(pstep * 0.006))
+        hw = max(soft_floor, hw)
         le = max(prev + 1, b - hw)
         re = max(le + 1, b + hw)
         gap_edges.append((le, re))
@@ -278,20 +454,32 @@ def detect_long_edges(arr, is_horizontal, mode="valley", margin_search_ratio=0.9
 
     content_ref = float(np.median(smoothed[size // 4 : size * 3 // 4]))
 
+    def _pick_best(threshold_val, content_val, full_size):
+        """当 threshold 法与 content_ref 法差异很大时，优先使用 threshold 法（更可靠）。"""
+        if threshold_val is not None and content_val is not None:
+            if abs(content_val - threshold_val) < full_size * 0.10:
+                return max(threshold_val, content_val)
+            return threshold_val
+        if threshold_val is not None:
+            return threshold_val
+        if content_val is not None:
+            return content_val
+        return None
+
     near_candidates = []
     far_candidates = []
     for m in ("valley", "peak"):
         near_t = _find_margin_threshold(smoothed[:search_len], size, m)
         near_c = _find_margin_content_ref(smoothed[:search_len], content_ref)
-        near_best = max(near_t or 0, near_c or 0)
-        if near_best > 0:
+        near_best = _pick_best(near_t, near_c, size)
+        if near_best is not None and near_best > 0:
             near_candidates.append(near_best)
 
         right_slice = smoothed[-search_len:][::-1]
         far_t = _find_margin_threshold(right_slice, size, m)
         far_c = _find_margin_content_ref(right_slice, content_ref)
-        far_best = max(far_t or 0, far_c or 0)
-        if far_best > 0:
+        far_best = _pick_best(far_t, far_c, size)
+        if far_best is not None and far_best > 0:
             far_candidates.append(size - far_best)
 
     if not near_candidates and not far_candidates:
@@ -320,12 +508,16 @@ def _detect_long_edges_proportional(arr, is_horizontal, chosen_edges, aspect_rat
     if not chosen_edges or aspect_ratio is None or aspect_ratio <= 0:
         return None
 
+    height, width = arr.shape
+    scan_size = width if is_horizontal else height
+    cross_size = height if is_horizontal else width
+
     if is_horizontal:
         projection = np.mean(arr, axis=1) / 255.0
     else:
         projection = np.mean(arr, axis=0) / 255.0
 
-    size = len(projection)
+    size = len(projection)  # cross_size
 
     # Compute median frame dimension along scan direction
     frame_dims = []
@@ -333,15 +525,18 @@ def _detect_long_edges_proportional(arr, is_horizontal, chosen_edges, aspect_rat
     for le, re in chosen_edges:
         frame_dims.append(le - prev)
         prev = re
-    frame_dims.append(size - prev)
+    frame_dims.append(scan_size - prev)
 
     median_dim = float(np.median(frame_dims))
     if median_dim <= 0:
         return None
 
     target = int(round(median_dim / aspect_ratio))
-    if target >= size or target < 3:
+    if target < 3:
         return None
+    if target > size:
+        # Theoretical span wider than image — use full image width
+        return int(0), int(size - 1)
 
     margin = max(5, int(size * 0.03))
     end_limit = size - target - margin + 1
@@ -362,45 +557,234 @@ def _detect_long_edges_proportional(arr, is_horizontal, chosen_edges, aspect_rat
     return int(best_start), int(best_start + target)
 
 
+def _refine_long_edges(
+    arr,
+    is_horizontal,
+    chosen_edges,
+    prev_long_edges,
+    aspect_ratio=3 / 2,
+    search_margin=50,
+):
+    """Refine long-edge boundaries using gap-driven aspect-ratio constraint.
+
+    The idea: gap detection (top/bottom) is more reliable than long-edge
+    detection (left/right) because frame gaps have strong brightness contrast.
+    We use the median frame height from gap analysis to compute a theoretical
+    frame width, then search for the steepest gradient near the previously
+    detected edge positions within a small ±search_margin window.
+
+    If the refined result deviates from the theoretical span by >50%,
+    we fall back to prev_long_edges.
+    """
+    if not chosen_edges or prev_long_edges == (0, 0):
+        return prev_long_edges
+
+    height, width = arr.shape
+    scan_size = width if is_horizontal else height
+    cross_size = height if is_horizontal else width
+
+    # 1. Median frame dimension along scan direction
+    frame_dims = []
+    prev = 0
+    for le, re in chosen_edges:
+        frame_dims.append(le - prev)
+        prev = re
+    frame_dims.append(scan_size - prev)
+    median_dim = float(np.median(frame_dims))
+    if median_dim <= 0:
+        return prev_long_edges
+
+    # 2. Theoretical span along cross direction
+    target_span = int(round(median_dim / aspect_ratio))
+
+    # 3. Cross-axis projection
+    if is_horizontal:
+        proj = np.mean(arr, axis=1) / 255.0
+    else:
+        proj = np.mean(arr, axis=0) / 255.0
+
+    # Light smoothing
+    ksize = max(3, cross_size // 400)
+    if ksize % 2 == 0:
+        ksize += 1
+    kernel = np.ones(ksize) / ksize
+    padded = np.pad(proj, (ksize // 2, ksize // 2), mode="edge")
+    smoothed = np.convolve(padded, kernel, mode="valid")
+
+    # 4. Local gradient search
+    def _search_local(prev_pos):
+        s0 = max(0, prev_pos - search_margin)
+        s1 = min(len(smoothed), prev_pos + search_margin + 1)
+        if s1 <= s0 + 1:
+            return prev_pos
+        sub = smoothed[s0:s1]
+
+        # Compute gradient
+        grad = np.diff(sub)
+        if len(grad) < 1:
+            return prev_pos
+
+        # Smooth gradient to reduce noise
+        g_ksize = min(5, max(3, len(grad) // 10))
+        if g_ksize % 2 == 0:
+            g_ksize += 1
+        if len(grad) >= g_ksize:
+            g_kernel = np.ones(g_ksize) / g_ksize
+            g_padded = np.pad(grad, (g_ksize // 2, g_ksize // 2), mode="edge")
+            smooth_grad = np.convolve(g_padded, g_kernel, mode="valid")[: len(grad)]
+        else:
+            smooth_grad = grad
+
+        # Find steepest transition (largest absolute gradient)
+        pos = int(np.argmax(np.abs(smooth_grad)))
+        return s0 + pos
+
+    prev_near, prev_far = prev_long_edges
+    near = _search_local(prev_near)
+    far = _search_local(prev_far)
+
+    # 5. Don't make the aspect ratio worse than the input
+    old_span = prev_far - prev_near
+    old_dev = abs(old_span - target_span)
+    new_span = far - near
+    new_dev = abs(new_span - target_span)
+    if new_dev > old_dev:
+        return prev_long_edges
+
+    if far <= near:
+        return prev_long_edges
+    actual_span = far - near
+    if actual_span < target_span * 0.5 or actual_span > target_span * 1.5:
+        return prev_long_edges
+
+    # 防止 refine 大幅偏离 preliminary 结果（±20px 或 5% 理论帧宽）
+    max_shift = max(20, int(target_span * 0.05))
+    if abs(near - prev_near) > max_shift or abs(far - prev_far) > max_shift:
+        return prev_long_edges
+
+    # 防止 refine 把边界推到图像边缘（可能包含扫描黑边/白边）
+    edge_margin = max(3, int(cross_size * 0.005))
+    if (prev_near >= edge_margin and near < edge_margin) or \
+       (prev_far <= cross_size - edge_margin and far > cross_size - edge_margin):
+        return prev_long_edges
+
+    return int(near), int(far)
+
+
 def _detect_scan_edge(proj, mode="peak", expected_frames=6, from_end=False):
-    """Detect scan-edge / sprocket-area before first or after last frame."""
+    """Detect scan-edge / sprocket-area before first or after last frame.
+
+    Uses gradient-based detection for sharp flat borders, with a brightness-
+    percentile fallback for gradual vignetting at the film edge.
+    """
     scan_size = len(proj)
     pstep = scan_size / expected_frames
-    search_end = max(100, int(scan_size * 0.05), int(pstep * 0.3))
+    search_end = max(30, int(scan_size * 0.05), int(pstep * 0.2))
 
     if from_end:
         sub = proj[-search_end:]
     else:
         sub = proj[:search_end]
 
-    vmin, vmax = float(np.min(sub)), float(np.max(sub))
-    contrast = vmax - vmin
-    if contrast < 0.03:
+    if len(sub) < 5:
         return None
 
-    midpoint = (vmin + vmax) / 2.0
+    # Compute brightness gradient
+    grad = np.abs(np.diff(sub))
+
+    # Dynamic threshold: 1.5x median gradient, floor at 0.002
+    noise_floor = float(np.percentile(grad, 50))
+    threshold = max(noise_floor * 1.5, 0.002)
+
+    # Maximum reasonable border width (5% of scan size)
+    max_border = max(5, int(scan_size * 0.05))
+
+    def _has_significant_gradient(idx):
+        """Require at least 2 neighbouring points above threshold (denoising)."""
+        if grad[idx] <= threshold:
+            return False
+        neighbours = 1
+        for j in (idx - 1, idx + 1):
+            if 0 <= j < len(grad) and grad[j] > threshold:
+                neighbours += 1
+        return neighbours >= 2
+
+    pos = None
+    if from_end:
+        for i in range(len(grad) - 1, -1, -1):
+            if _has_significant_gradient(i):
+                pos = scan_size - search_end + i + 1
+                border_width = scan_size - pos
+                if border_width > max_border:
+                    pos = None
+                break
+    else:
+        for i in range(len(grad)):
+            if _has_significant_gradient(i):
+                if i + 1 > max_border:
+                    pos = None
+                else:
+                    pos = i + 1
+                break
+
+    # Verify border flatness (gradient method succeeds only on truly flat borders)
+    if pos is not None:
+        if from_end:
+            border = proj[pos:]
+        else:
+            border = proj[:pos]
+        mid_start = min(search_end, int(scan_size * 0.2))
+        mid_end = max(scan_size - search_end, int(scan_size * 0.8))
+        if mid_end > mid_start:
+            mid_std = float(np.std(proj[mid_start:mid_end]))
+            mid_mean = float(np.median(proj[mid_start:mid_end]))
+        else:
+            mid_std = 0.01
+            mid_mean = 0.3
+        border_std = float(np.std(border)) if len(border) > 1 else 0.0
+        border_len = len(border)
+        border_mean = float(np.mean(border)) if border_len > 0 else mid_mean
+        # Standard flatness for long borders
+        if border_len >= 10 and border_std < mid_std * 0.5:
+            return pos
+        # Short borders at image edge are common; accept if reasonably flat and dark
+        if 3 <= border_len < 10 and border_std < mid_std * 0.8 and border_mean < mid_mean * 0.5:
+            return pos
+        if border_len < 3 and border_mean < mid_mean * 0.5:
+            return pos
+        # Bright-edge scan (overexposed scanner edge) — common on film strips scanned flush
+        if border_mean > mid_mean * 1.15 and border_std < mid_std * 0.5:
+            # Extend cut to where brightness normalises (drops below 1.1x mid_mean)
+            search_limit = min(100, search_end)
+            if from_end:
+                # Search inward from pos toward scan_size - search_limit
+                for i in range(pos, max(scan_size - search_limit, pos - search_limit), -1):
+                    if proj[i] < mid_mean * 1.1:
+                        return i
+                return scan_size - search_limit
+            else:
+                for i in range(pos, search_limit):
+                    if proj[i] < mid_mean * 1.1:
+                        return i
+                return search_limit
+        pos = None  # gradient result rejected, will fallback
+
+    # Fallback: brightness percentile (handles gradual vignetting)
+    mid_start = min(search_end, int(scan_size * 0.2))
+    mid_end = max(scan_size - search_end, int(scan_size * 0.8))
+    if mid_end > mid_start:
+        content_p5 = float(np.percentile(proj[mid_start:mid_end], 5))
+    else:
+        content_p5 = 0.05
 
     if from_end:
-        for i in range(len(sub) - 1, -1, -1):
-            crossed = (mode == "peak" and sub[i] < midpoint) or (mode == "valley" and sub[i] > midpoint)
-            if crossed:
-                actual_pos = scan_size - search_end + i
-                if actual_pos < scan_size - 50 and actual_pos > scan_size - search_end * 0.7:
-                    left_avg = float(np.mean(proj[max(0, actual_pos - 50):actual_pos]))
-                    right_avg = float(np.mean(proj[actual_pos:min(scan_size, actual_pos + 50)]))
-                    if abs(left_avg - right_avg) > 0.01:
-                        return actual_pos
-                return None
+        for i in range(scan_size - 1, -1, -1):
+            if proj[i] > content_p5:
+                return i + 1
     else:
-        for i in range(len(sub)):
-            crossed = (mode == "peak" and sub[i] < midpoint) or (mode == "valley" and sub[i] > midpoint)
-            if crossed:
-                if i > 50 and i < search_end * 0.7:
-                    left_avg = float(np.mean(sub[max(0, i - 50):i]))
-                    right_avg = float(np.mean(sub[i:min(len(sub), i + 50)]))
-                    if abs(left_avg - right_avg) > 0.01:
-                        return i
-                return None
+        for i in range(scan_size):
+            if proj[i] > content_p5:
+                return i
     return None
 
 
@@ -425,7 +809,7 @@ def build_frames(
             right = last_offset if i == n else gap_edges[i][0]
             left = max(0, min(left, width - 1))
             right = max(left + 1, min(right, width))
-            if long_edges:
+            if long_edges is not None and long_edges != (0, 0):
                 top, bottom = long_edges
             else:
                 top, bottom = 0, height
@@ -437,7 +821,7 @@ def build_frames(
             bottom = last_offset if i == n else gap_edges[i][0]
             top = max(0, min(top, height - 1))
             bottom = max(top + 1, min(bottom, height))
-            if long_edges:
+            if long_edges is not None and long_edges != (0, 0):
                 left, right = long_edges
             else:
                 left, right = 0, width
@@ -462,22 +846,55 @@ def build_frames(
     return frames
 
 
+def _validate_gap_shape(proj, boundaries, mode="peak", check_radius=40):
+    """Score how well the boundary positions match the expected gap shape.
+
+    In *peak* mode a real film gap is a bright stripe flanked by darker
+    frame content, so the projection at the boundary centre should be
+    higher than its local neighbourhood.  In *valley* mode the opposite
+    holds.  Returns a positive score (higher = better match); negative
+    values indicate anti-correlation (the opposite mode is a better fit).
+    """
+    if len(boundaries) < 3:
+        return 0.0
+    scores = []
+    for b in boundaries[1:-1]:
+        s0 = max(0, b - check_radius)
+        s1 = min(len(proj), b + check_radius)
+        local = proj[s0:s1]
+        if len(local) < 5:
+            continue
+        mid = len(local) // 2
+        left_mean = float(np.mean(local[:mid]))
+        right_mean = float(np.mean(local[mid:]))
+        centre_mean = float(np.mean(local[mid - 3:mid + 3]))
+        if mode == "peak":
+            # Centre should be brighter than both sides
+            scores.append(centre_mean - max(left_mean, right_mean))
+        else:
+            # Centre should be darker than both sides
+            scores.append(min(left_mean, right_mean) - centre_mean)
+    return float(np.mean(scores)) if scores else 0.0
+
+
 def _analyze_single_config(smoothed, scan_size, expected_frames, cleanup_scale):
     """Quick evaluation of one frame-count configuration."""
+    # Valley path
+    valley_peaks = _find_local_peaks(smoothed, "valley")
+    valley_bounds_raw = find_boundaries(smoothed, expected_frames, scan_size, "valley")
     valley_bounds = refine_boundaries(
-        find_boundaries(smoothed, expected_frames, scan_size, "valley"),
-        smoothed,
-        expected_frames,
-        scan_size,
+        _enforce_boundary_consistency(valley_bounds_raw, valley_peaks, scan_size, expected_frames),
+        smoothed, expected_frames, scan_size,
     )
     valley_edges = gap_edges_from_boundaries(smoothed, valley_bounds, expected_frames, scan_size, "valley", cleanup_scale)
     valley_variance = evaluate_uniformity([0] + [e for pair in valley_edges for e in pair] + [scan_size])
 
+    # Peak path
+    peak_peaks = _find_local_peaks(smoothed, "peak")
+    peak_bounds_raw = find_boundaries(smoothed, expected_frames, scan_size, "peak")
     peak_bounds = refine_boundaries(
-        find_boundaries(smoothed, expected_frames, scan_size, "peak"),
-        smoothed,
-        expected_frames,
-        scan_size,
+        _enforce_boundary_consistency(peak_bounds_raw, peak_peaks, scan_size, expected_frames),
+        smoothed, expected_frames, scan_size,
     )
     peak_edges = gap_edges_from_boundaries(smoothed, peak_bounds, expected_frames, scan_size, "peak", cleanup_scale)
     peak_variance = evaluate_uniformity([0] + [e for pair in peak_edges for e in pair] + [scan_size])
@@ -507,7 +924,17 @@ def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
     best_result = None
     for ef in range(2, max_frames + 1):
         ve, vv, pe, pv = _analyze_single_config(smoothed, scan_size, ef, cleanup_scale)
-        chosen_edges, chosen_var = (pe, pv) if pv < vv else (ve, vv)
+        # Prefer the mode whose gap shape better matches the data
+        peak_shape = _validate_gap_shape(smoothed, [0] + [(le + re) // 2 for le, re in pe] + [scan_size], "peak")
+        valley_shape = _validate_gap_shape(smoothed, [0] + [(le + re) // 2 for le, re in ve] + [scan_size], "valley")
+        if peak_shape > 0 and valley_shape <= 0:
+            chosen_edges, chosen_var = pe, pv
+        elif valley_shape > 0 and peak_shape <= 0:
+            chosen_edges, chosen_var = ve, vv
+        elif pv < vv:
+            chosen_edges, chosen_var = pe, pv
+        else:
+            chosen_edges, chosen_var = ve, vv
         fallback_count = sum(1 for le, re in chosen_edges if le == re)
         cv = _compute_frame_width_cv(chosen_edges, scan_size)
         cv_penalty = max(0.0, cv - 0.10) * 2.0
@@ -522,7 +949,7 @@ def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
     return best_frames, best_result
 
 
-def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: float = 0.5, original_path: str | None = None) -> dict:
+def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: float = 0.5, original_path: Optional[str] = None, aspect_ratio: float = 3 / 2) -> dict:
     """
     Analyse a scanned film strip and detect frame boundaries.
 
@@ -535,10 +962,11 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     cleanup_scale : float
         Factor controlling how aggressively gap edges are cleaned.
     original_path : str, optional
-        Path to the original full-resolution image.  If the *cross*
-        dimension of ``image_path`` is < 2000 px the detector will
-        load ``original_path`` for long-edge detection to maintain
-        accuracy.
+        Path to the original full-resolution image.  When provided,
+        the detector will always load ``original_path`` and run all
+        detection (projection, gap, long-edge, scan-edge) on the
+        original pixels for maximum accuracy.  Coordinates are then
+        scaled back to thumbnail space before being returned.
 
     Returns
     -------
@@ -551,87 +979,325 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     mem_before = psutil.Process().memory_info().rss / 1024 / 1024 if HAS_PSUTIL else 0
 
     arr = _load_image_array(image_path)
-    height, width = arr.shape
-    is_horizontal = width >= height
+    thumb_h, thumb_w = arr.shape
+    is_horizontal = thumb_w >= thumb_h
 
+    # ------------------------------------------------------------------
+    # Always run detection on the original image when available
+    # ------------------------------------------------------------------
+    cross_size = thumb_h if is_horizontal else thumb_w
+    orig_arr = arr
+    orig_h, orig_w = thumb_h, thumb_w
+
+    if original_path:
+        try:
+            orig_arr = _load_image_array(original_path)
+            orig_h, orig_w = orig_arr.shape
+        except Exception:
+            pass
+
+    # Scale factors for converting original coordinates back to thumbnail
+    scale_h = thumb_h / orig_h
+    scale_w = thumb_w / orig_w
+    scan_scale = scale_w if is_horizontal else scale_h
+    cross_scale = scale_h if is_horizontal else scale_w
+
+    # ------------------------------------------------------------------
+    # All detection runs on orig_arr (higher resolution when available)
+    # ------------------------------------------------------------------
     if is_horizontal:
-        projection = np.mean(arr, axis=0) / 255.0
+        orig_projection = np.mean(orig_arr, axis=0) / 255.0
     else:
-        projection = np.mean(arr, axis=1) / 255.0
-    scan_size = width if is_horizontal else height
+        orig_projection = np.mean(orig_arr, axis=1) / 255.0
+    orig_scan_size = len(orig_projection)
 
-    base_pstep = scan_size / 6
+    base_pstep = orig_scan_size / max(expected_frames if expected_frames > 0 else 6, 1)
     window_size = max(5, min(21, int(base_pstep * 0.08)))
     if window_size % 2 == 0:
         window_size += 1
     kernel = np.ones(window_size) / window_size
-    padded = np.pad(projection, (window_size // 2, window_size // 2), mode="edge")
-    smoothed = np.convolve(padded, kernel, mode="valid")
+    padded = np.pad(orig_projection, (window_size // 2, window_size // 2), mode="edge")
+    orig_smoothed = np.convolve(padded, kernel, mode="valid")
 
     auto_detected = False
     if expected_frames <= 0:
         auto_detected = True
-        expected_frames, auto_result = _auto_detect_frames(smoothed, scan_size, cleanup_scale)
+        expected_frames, auto_result = _auto_detect_frames(orig_smoothed, orig_scan_size, cleanup_scale)
         valley_edges, valley_variance, peak_edges, peak_variance = auto_result
     else:
-        valley_edges, valley_variance, peak_edges, peak_variance = _analyze_single_config(smoothed, scan_size, expected_frames, cleanup_scale)
+        valley_edges, valley_variance, peak_edges, peak_variance = _analyze_single_config(
+            orig_smoothed, orig_scan_size, expected_frames, cleanup_scale
+        )
 
-    if peak_variance < valley_variance:
-        chosen_edges = peak_edges
+    # ---- mode selection: prefer the mode whose gap shape matches the data ----
+    peak_shape = _validate_gap_shape(orig_smoothed, [0] + [(le + re) // 2 for le, re in peak_edges] + [orig_scan_size], "peak")
+    valley_shape = _validate_gap_shape(orig_smoothed, [0] + [(le + re) // 2 for le, re in valley_edges] + [orig_scan_size], "valley")
+
+    # Strong shape preference: if one mode has positive shape score and the
+    # other is negative, shape wins over variance.
+    if peak_shape > 0 and valley_shape <= 0:
+        orig_chosen_edges = peak_edges
+        chosen_mode = "peak"
+    elif valley_shape > 0 and peak_shape <= 0:
+        orig_chosen_edges = valley_edges
+        chosen_mode = "valley"
+    elif peak_variance < valley_variance:
+        orig_chosen_edges = peak_edges
         chosen_mode = "peak"
     else:
-        chosen_edges = valley_edges
+        orig_chosen_edges = valley_edges
         chosen_mode = "valley"
 
-    # Long-edge detection — use original if thumbnail resolution is too low
-    cross_size = height if is_horizontal else width
-    long_edge_arr = arr
-    used_original_for_long_edge = False
-    if original_path and cross_size < 2000:
-        try:
-            long_edge_arr = _load_image_array(original_path)
-            used_original_for_long_edge = True
-        except Exception:
-            pass
-
-    long_edges = detect_long_edges(long_edge_arr, is_horizontal, chosen_mode)
-    size_for_fallback = height if is_horizontal else width
-    if long_edges == (0, size_for_fallback):
+    # Long-edge detection on original image
+    orig_long_edges = detect_long_edges(orig_arr, is_horizontal, chosen_mode)
+    orig_cross_size = orig_w if not is_horizontal else orig_h
+    if orig_long_edges == (0, orig_cross_size):
         opposite_mode = "peak" if chosen_mode == "valley" else "valley"
-        long_edges = detect_long_edges(long_edge_arr, is_horizontal, opposite_mode)
+        orig_long_edges = detect_long_edges(orig_arr, is_horizontal, opposite_mode)
 
-    # Aspect-ratio constrained refinement (replaces symmetric assumption)
-    proportional = _detect_long_edges_proportional(
-        long_edge_arr, is_horizontal, chosen_edges, aspect_ratio=3 / 2
+    # Aspect-ratio constrained refinement on original image
+    orig_proportional = _detect_long_edges_proportional(
+        orig_arr, is_horizontal, orig_chosen_edges, aspect_ratio=3 / 2
     )
-    if proportional:
-        prop_near, prop_far = proportional
+    if orig_proportional:
+        prop_near, prop_far = orig_proportional
         prop_span = prop_far - prop_near
-        if long_edges == (0, size_for_fallback):
-            long_edges = proportional
+        orig_span = orig_long_edges[1] - orig_long_edges[0]
+        min_reasonable = max(20, int(orig_cross_size * 0.05))
+
+        # Prefer the proportional result (gap-driven, more reliable) whenever
+        # it produces a reasonable span — unless it would aggressively crop
+        # valid content that the direct detector saw.
+        if prop_span >= min_reasonable:
+            if orig_long_edges == (0, orig_cross_size):
+                # Direct detection failed entirely — use proportional
+                orig_long_edges = orig_proportional
+            elif prop_span >= orig_span * 0.92:
+                # Proportional agrees with direct (within 8 %) — use the
+                # gap-driven result for precision
+                orig_long_edges = orig_proportional
+        elif orig_long_edges == (0, orig_cross_size) and prop_span > 0:
+            # Last resort: even a short proportional result beats nothing
+            orig_long_edges = orig_proportional
+
+    # Final sanity on original coordinates
+    if (orig_long_edges[1] - orig_long_edges[0]) < max(10, int(orig_cross_size * 0.03)):
+        orig_long_edges = (0, orig_cross_size)
+
+    # Refine on original image
+    orig_prev_long_edges = orig_long_edges
+    refined = _refine_long_edges(
+        orig_arr, is_horizontal, orig_chosen_edges, orig_prev_long_edges,
+        aspect_ratio=3 / 2, search_margin=50,
+    )
+    orig_long_edges = refined if refined else orig_prev_long_edges
+
+    # Scan-edge detection on original image projection (use unsmoothed for sharper edges)
+    first_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=False)
+    last_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=True)
+
+    # ------------------------------------------------------------------
+    # Scale all original coordinates back to thumbnail space
+    # ------------------------------------------------------------------
+    def _scale_edges(edges, s):
+        return [(int(le * s), int(re * s)) for le, re in edges]
+
+    chosen_edges = _scale_edges(orig_chosen_edges, scan_scale)
+    long_edges = (int(orig_long_edges[0] * cross_scale), int(orig_long_edges[1] * cross_scale))
+    prev_long_edges = (int(orig_prev_long_edges[0] * cross_scale), int(orig_prev_long_edges[1] * cross_scale))
+    first_offset = int(first_offset_raw * scan_scale) if first_offset_raw is not None else 0
+    last_offset = int(last_offset_raw * scan_scale) if last_offset_raw is not None else None
+
+    # Build frames using thumbnail dimensions so relative coords match Lightroom
+    frames = build_frames(chosen_edges, thumb_w, thumb_h, is_horizontal, long_edges, first_offset, last_offset)
+
+    # Override relative coordinates with original-image precision.
+    # Absolute coords stay in thumbnail space for debug/visualization compatibility.
+    n = len(frames) - 1
+    for i, frame in enumerate(frames):
+        if is_horizontal:
+            orig_left = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                orig_chosen_edges[i - 1][1] if i > 0 else 0
+            )
+            orig_right = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                orig_chosen_edges[i][0] if i < n else orig_w
+            )
+            orig_top, orig_bottom = orig_long_edges
         else:
-            orig_span = long_edges[1] - long_edges[0]
-            min_reasonable = max(20, int(size_for_fallback * 0.05))
-            if orig_span < min_reasonable:
-                if prop_span >= min_reasonable:
-                    long_edges = proportional
-            elif abs(orig_span - prop_span) > size_for_fallback * 0.15:
-                long_edges = proportional
+            orig_top = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                orig_chosen_edges[i - 1][1] if i > 0 else 0
+            )
+            orig_bottom = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                orig_chosen_edges[i][0] if i < n else orig_h
+            )
+            orig_left, orig_right = orig_long_edges
+        frame["relativeTop"] = round(orig_top / orig_h, 6) if orig_h > 0 else 0.0
+        frame["relativeBottom"] = round(orig_bottom / orig_h, 6) if orig_h > 0 else 1.0
+        frame["relativeLeft"] = round(orig_left / orig_w, 6) if orig_w > 0 else 0.0
+        frame["relativeRight"] = round(orig_right / orig_w, 6) if orig_w > 0 else 1.0
 
-    # Final sanity: never accept a ridiculously narrow span
-    if (long_edges[1] - long_edges[0]) < max(10, int(size_for_fallback * 0.03)):
-        long_edges = (0, size_for_fallback)
+    # --- Enforce strict 3:2 / 2:3 aspect ratio on MIDDLE frames only ---
+    # First and last frames may be truncated by scan edges; we only force
+    # exact ratio on the complete middle frames.
+    if aspect_ratio and len(frames) > 0:
+        n = len(frames) - 1
 
-    if used_original_for_long_edge and long_edge_arr is not arr:
-        orig_h, orig_w = long_edge_arr.shape
-        scale = height / orig_h if is_horizontal else width / orig_w
-        long_edges = (int(long_edges[0] * scale), int(long_edges[1] * scale))
+        # Collect scan-direction dimensions for MIDDLE frames only (index 1..n-1)
+        middle_scan_dims = []
+        for i in range(1, n):
+            if is_horizontal:
+                left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                    orig_chosen_edges[i - 1][1] if i > 0 else 0
+                )
+                right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                    orig_chosen_edges[i][0] if i < n else orig_w
+                )
+                middle_scan_dims.append(right_b - left_b)
+            else:
+                top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                    orig_chosen_edges[i - 1][1] if i > 0 else 0
+                )
+                bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                    orig_chosen_edges[i][0] if i < n else orig_h
+                )
+                middle_scan_dims.append(bottom_b - top_b)
 
-    first_offset = _detect_scan_edge(smoothed, chosen_mode, expected_frames, from_end=False)
-    last_offset = _detect_scan_edge(smoothed, chosen_mode, expected_frames, from_end=True)
+        if middle_scan_dims:
+            unified_scan_dim = int(np.median(middle_scan_dims))
+        else:
+            # Fallback: only 2 frames, compute from available frames
+            all_scan_dims = []
+            for i in range(len(frames)):
+                if is_horizontal:
+                    left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                        orig_chosen_edges[i - 1][1] if i > 0 else 0
+                    )
+                    right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                        orig_chosen_edges[i][0] if i < n else orig_w
+                    )
+                    all_scan_dims.append(right_b - left_b)
+                else:
+                    top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                        orig_chosen_edges[i - 1][1] if i > 0 else 0
+                    )
+                    bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                        orig_chosen_edges[i][0] if i < n else orig_h
+                    )
+                    all_scan_dims.append(bottom_b - top_b)
+            unified_scan_dim = int(np.median(all_scan_dims)) if all_scan_dims else 0
 
-    frames = build_frames(chosen_edges, width, height, is_horizontal, long_edges, first_offset or 0, last_offset)
-    crop_angle = estimate_rotation(arr, expected_frames, width, height, is_horizontal, chosen_mode)
+        unified_cross_dim = int(round(unified_scan_dim / aspect_ratio))
+
+        # If image doesn't have enough cross-space, shrink scan-dim to fit
+        if unified_cross_dim > orig_cross_size:
+            unified_cross_dim = orig_cross_size
+            unified_scan_dim = int(round(unified_cross_dim * aspect_ratio))
+
+        # Recenter long edges to exact unified cross-dimension
+        curr_near, curr_far = orig_long_edges
+        center = (curr_near + curr_far) // 2
+        new_near = max(0, center - unified_cross_dim // 2)
+        new_far = min(orig_cross_size, new_near + unified_cross_dim)
+        if new_far > orig_cross_size:
+            new_far = orig_cross_size
+            new_near = max(0, new_far - unified_cross_dim)
+        orig_long_edges = (new_near, new_far)
+
+        # Rebuild MIDDLE frames with unified dimensions
+        for i, fr in enumerate(frames):
+            is_middle = (0 < i < n)
+            if not is_middle:
+                # First / last frame: keep original scan dim, but use unified width
+                # (do NOT shrink width when height is truncated)
+                if is_horizontal:
+                    left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                        orig_chosen_edges[i - 1][1] if i > 0 else 0
+                    )
+                    right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                        orig_chosen_edges[i][0] if i < n else orig_w
+                    )
+                    new_left = max(0, left_b)
+                    new_right = min(orig_w, right_b)
+                    fr["left"] = int(new_left * scan_scale)
+                    fr["right"] = int(new_right * scan_scale)
+                    fr["top"] = int(orig_long_edges[0] * cross_scale)
+                    fr["bottom"] = int(orig_long_edges[1] * cross_scale)
+                    fr["relativeLeft"] = round(new_left / orig_w, 6) if orig_w > 0 else 0.0
+                    fr["relativeRight"] = round(new_right / orig_w, 6) if orig_w > 0 else 1.0
+                    fr["relativeTop"] = round(orig_long_edges[0] / orig_h, 6) if orig_h > 0 else 0.0
+                    fr["relativeBottom"] = round(orig_long_edges[1] / orig_h, 6) if orig_h > 0 else 1.0
+                    fr["frameWidth"] = new_right - new_left
+                else:
+                    top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                        orig_chosen_edges[i - 1][1] if i > 0 else 0
+                    )
+                    bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                        orig_chosen_edges[i][0] if i < n else orig_h
+                    )
+                    new_top = max(0, top_b)
+                    new_bottom = min(orig_h, bottom_b)
+                    fr["top"] = int(new_top * scan_scale)
+                    fr["bottom"] = int(new_bottom * scan_scale)
+                    fr["left"] = int(orig_long_edges[0] * cross_scale)
+                    fr["right"] = int(orig_long_edges[1] * cross_scale)
+                    fr["relativeTop"] = round(new_top / orig_h, 6) if orig_h > 0 else 0.0
+                    fr["relativeBottom"] = round(new_bottom / orig_h, 6) if orig_h > 0 else 1.0
+                    fr["relativeLeft"] = round(orig_long_edges[0] / orig_w, 6) if orig_w > 0 else 0.0
+                    fr["relativeRight"] = round(orig_long_edges[1] / orig_w, 6) if orig_w > 0 else 1.0
+                    fr["frameWidth"] = new_bottom - new_top
+                continue
+
+            if is_horizontal:
+                left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                    orig_chosen_edges[i - 1][1] if i > 0 else 0
+                )
+                right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                    orig_chosen_edges[i][0] if i < n else orig_w
+                )
+                center_scan = (left_b + right_b) // 2
+                new_left = max(0, center_scan - unified_scan_dim // 2)
+                new_right = min(orig_w, new_left + unified_scan_dim)
+                if new_right > orig_w:
+                    new_right = orig_w
+                    new_left = max(0, new_right - unified_scan_dim)
+
+                fr["left"] = int(new_left * scan_scale)
+                fr["right"] = int(new_right * scan_scale)
+                fr["top"] = int(orig_long_edges[0] * cross_scale)
+                fr["bottom"] = int(orig_long_edges[1] * cross_scale)
+                fr["relativeLeft"] = round(new_left / orig_w, 6) if orig_w > 0 else 0.0
+                fr["relativeRight"] = round(new_right / orig_w, 6) if orig_w > 0 else 1.0
+                fr["relativeTop"] = round(orig_long_edges[0] / orig_h, 6) if orig_h > 0 else 0.0
+                fr["relativeBottom"] = round(orig_long_edges[1] / orig_h, 6) if orig_h > 0 else 1.0
+                fr["frameWidth"] = new_right - new_left
+            else:
+                top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
+                    orig_chosen_edges[i - 1][1] if i > 0 else 0
+                )
+                bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
+                    orig_chosen_edges[i][0] if i < n else orig_h
+                )
+                center_scan = (top_b + bottom_b) // 2
+                new_top = max(0, center_scan - unified_scan_dim // 2)
+                new_bottom = min(orig_h, new_top + unified_scan_dim)
+                if new_bottom > orig_h:
+                    new_bottom = orig_h
+                    new_top = max(0, new_bottom - unified_scan_dim)
+
+                fr["top"] = int(new_top * scan_scale)
+                fr["bottom"] = int(new_bottom * scan_scale)
+                fr["left"] = int(orig_long_edges[0] * cross_scale)
+                fr["right"] = int(orig_long_edges[1] * cross_scale)
+                fr["relativeTop"] = round(new_top / orig_h, 6) if orig_h > 0 else 0.0
+                fr["relativeBottom"] = round(new_bottom / orig_h, 6) if orig_h > 0 else 1.0
+                fr["relativeLeft"] = round(orig_long_edges[0] / orig_w, 6) if orig_w > 0 else 0.0
+                fr["relativeRight"] = round(orig_long_edges[1] / orig_w, 6) if orig_w > 0 else 1.0
+                fr["frameWidth"] = new_bottom - new_top
+
+        # Update thumbnail-space long edges for debug output
+        long_edges = (int(orig_long_edges[0] * cross_scale), int(orig_long_edges[1] * cross_scale))
+
+    crop_angle = estimate_rotation(orig_arr, expected_frames, orig_w, orig_h, is_horizontal, chosen_mode)
 
     elapsed = time.time() - t0
     if HAS_PSUTIL:
@@ -644,11 +1310,13 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         print(f"[Perf] analyze_image: {elapsed:.2f}s", file=__import__("sys").stderr)
 
     debug_info = {
-        "imageHeight": height,
-        "imageWidth": width,
+        "imageHeight": thumb_h,
+        "imageWidth": thumb_w,
         "isHorizontal": is_horizontal,
+        "usedOriginalForLongEdge": original_path is not None,
         "gapEdges": chosen_edges,
         "longEdges": long_edges,
+        "prevLongEdges": prev_long_edges,
         "mode": chosen_mode,
         "valleyVariance": round(valley_variance, 2),
         "peakVariance": round(peak_variance, 2),
@@ -658,8 +1326,8 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
 
     return {
         "frameCount": len(frames),
-        "sourceWidth": width,
-        "sourceHeight": height,
+        "sourceWidth": thumb_w,
+        "sourceHeight": thumb_h,
         "frames": frames,
         "cropAngle": round(crop_angle, 2),
         "debug": debug_info,

@@ -38,7 +38,7 @@ function ProcessAgent.findPythonPath()
     return _cachedPythonPath
   end
 
-  local possiblePythons = {"/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"}
+  local possiblePythons = {"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3", "/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"}
   for _, pyPath in ipairs(possiblePythons) do
     if LrFileUtils.exists(pyPath) then
       _cachedPythonPath = pyPath
@@ -110,26 +110,40 @@ end
 -- analyzeWithPython — 调用 detect_thumb.py 并返回解析结果
 -- ------------------------------------------------------------------
 function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath)
+  -- 确保工作目录存在（可能被独立调用，ThumbnailAgent 尚未初始化）
+  if not LrFileUtils.exists(WORK_DIR) then
+    LrFileUtils.createAllDirectories(WORK_DIR)
+  end
+
   local pythonScript = LrPathUtils.child(pluginPath, "detect_thumb.py")
 
   if not LrFileUtils.exists(pythonScript) then
     return nil, "Python脚本不存在: " .. pythonScript
   end
 
+  -- 优先使用缩略图；若缩略图不可用且原图存在，则 fallback 到原图直接检测
+  local inputPath = thumbPath
   if not LrFileUtils.exists(thumbPath) then
-    return nil, "缩略图不存在: " .. thumbPath
+    if originalPath and LrFileUtils.exists(originalPath) then
+      logger:trace("缩略图不可用，fallback 到原图: " .. originalPath)
+      inputPath = originalPath
+    else
+      return nil, "缩略图不存在且无原图 fallback: " .. (thumbPath or "nil")
+    end
   end
 
   local pythonCmd = ProcessAgent.findPythonPath()
-  local cmd = string.format('"%s" "%s" "%s" --frames %d',
-    pythonCmd, pythonScript, thumbPath, expectedFrames)
+  local cmd = string.format('"%s" "%s" "%s" --frames %d --cleanup-scale 0.50',
+    pythonCmd, pythonScript, inputPath, expectedFrames)
 
   if originalPath and LrFileUtils.exists(originalPath) then
     cmd = cmd .. ' --original "' .. originalPath .. '"'
   end
 
   local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
-  local shellCmd = cmd .. ' > "' .. tempOutputFile .. '"'
+  -- 同时捕获 stderr，便于诊断 Python 异常
+  -- PYTHONDONTWRITEBYTECODE=1 防止 Python 缓存旧的字节码导致代码修改不生效
+  local shellCmd = 'PYTHONDONTWRITEBYTECODE=1 ' .. cmd .. ' > "' .. tempOutputFile .. '" 2>&1'
   local exitCode = LrTasks.execute(shellCmd)
 
   local output = ""
@@ -141,21 +155,30 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath)
   end
 
   logger:trace(string.format("analyzeWithPython exit=%d, len=%d", exitCode, #output))
+  logger:trace("analyzeWithPython output: " .. string.sub(output, 1, 3000))
 
   if exitCode ~= 0 then
-    local err = "Python执行失败 (退出码 " .. exitCode .. ")"
-    if #output > 0 then err = err .. ": " .. string.sub(output, 1, 200) end
+    local err = string.format("Python执行失败 (路径: %s, 退出码: %d)", pythonCmd, exitCode)
+    if #output > 0 then err = err .. ": " .. string.sub(output, 1, 2000) end
     return nil, err
   end
 
   if #output == 0 then
-    return nil, "Python无输出"
+    return nil, "Python无输出 (路径: " .. pythonCmd .. ")"
   end
 
   local result = ProcessAgent.parseJSON(output)
   if not result then return nil, "无法解析JSON输出" end
   if result.error then return nil, "Python错误: " .. result.error end
   if not result.frames or #result.frames == 0 then return nil, "未检测到帧" end
+
+  -- Log diagnostic info if available
+  if result._diag then
+    logger:trace(string.format("Python诊断: exe=%s, ver=%s, mtime=%s",
+      result._diag.pythonExecutable or "?",
+      result._diag.pythonVersion or "?",
+      result._diag.detectorMtime or "?"))
+  end
 
   return result, nil
 end
@@ -169,6 +192,9 @@ function ProcessAgent.directionAlign(result, photo)
   local lrHeight = (photoDimensions and photoDimensions.height) or result.sourceHeight or 1024
   local isPyHorizontal = result.isHorizontal
   local isLrHorizontal = lrWidth >= lrHeight
+
+  logger:trace(string.format("directionAlign: pyH=%s, lrH=%s, lrW=%d, lrH=%d, srcW=%d, srcH=%d",
+    tostring(isPyHorizontal), tostring(isLrHorizontal), lrWidth, lrHeight, result.sourceWidth or 0, result.sourceHeight or 0))
 
   if isPyHorizontal ~= isLrHorizontal then
     logger:trace("方向不一致，旋转坐标...")
@@ -190,6 +216,9 @@ function ProcessAgent.directionAlign(result, photo)
     end
     result.sourceWidth = lrWidth
     result.sourceHeight = lrHeight
+    -- When coordinates are rotated 90°, the crop angle axis is also rotated.
+    -- Negate the angle so the correction is applied in the new orientation.
+    result.cropAngle = -(result.cropAngle or 0)
     for _, frame in ipairs(result.frames) do
       frame.sourceWidth = lrWidth
       frame.sourceHeight = lrHeight
@@ -234,10 +263,10 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName)
   -- 步骤1: 获取缩略图
   local thumbPath, thumbErr = ProcessAgent.extractThumbnail(photo)
   if not thumbPath then
-    return 0, "缩略图获取失败 - " .. (thumbErr or "未知")
+    logger:trace("缩略图获取失败: " .. (thumbErr or "未知") .. "，尝试原图 fallback")
   end
 
-  -- 步骤2: Python 分析
+  -- 步骤2: Python 分析（缩略图失败时 fallback 到原图）
   local originalPath = photo:getRawMetadata("path")
   local result, analyzeError = ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath)
   if not result then
@@ -250,6 +279,12 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName)
   -- 步骤4: 为每帧创建虚拟副本并应用裁剪
   local frames = result.frames
   local createdCount = 0
+
+  if #frames > 0 then
+    local f0 = frames[1]
+    logger:trace(string.format("detectAndCrop frame1 coords: top=%.6f bottom=%.6f left=%.6f right=%.6f",
+      f0.relativeTop or 0, f0.relativeBottom or 0, f0.relativeLeft or 0, f0.relativeRight or 0))
+  end
 
   for _, frame in ipairs(frames) do
     frame.top = frame.top or 0
@@ -302,7 +337,6 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName)
         end
       end
 
-      local copyName = string.format("%s_帧%02d", baseName, frame.index)
       pcall(function()
         virtualCopy:setRawMetadata('copyName', copyName)
       end)

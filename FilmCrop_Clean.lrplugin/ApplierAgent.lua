@@ -195,7 +195,18 @@ function ApplierAgent.resetCrop(photo)
     LensProfileEnable = 0,
   }
 
-  photo:applyDevelopSettings(settings)
+  -- 对齐 applyCrop 的 API 选择：优先使用 adjustPhotoDevelopSettings
+  local catalog = LrApplication.activeCatalog()
+  local useAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
+
+  if useAdjust then
+    logger:trace("使用 adjustPhotoDevelopSettings 重置裁剪")
+    catalog:adjustPhotoDevelopSettings(photo, settings)
+  else
+    logger:trace("使用 applyDevelopSettings 重置裁剪")
+    photo:applyDevelopSettings(settings)
+  end
+
   logger:trace("裁剪及透视变换已重置")
   return true, nil
 end
