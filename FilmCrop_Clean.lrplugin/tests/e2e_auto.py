@@ -241,7 +241,7 @@ def generate_json_for_photo(photo_path, expected_frames=6):
     cmd = [
         "python3", DETECTOR_SCRIPT,
         photo_path,
-        "--expected-frames", str(expected_frames)
+        "--frames", str(expected_frames)
     ]
     print(f"  运行检测: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
