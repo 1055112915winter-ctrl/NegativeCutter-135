@@ -946,20 +946,23 @@ local function startAutoWatch(jsonPath)
         logger:trace("自动检测: JSON 文件已更新，开始应用...")
 
         -- 每次处理时重新获取当前选中的照片
-        local okCat, currentCatalog = pcall(LrApplication.activeCatalog)
+        -- NOTE: Lua's built-in `pcall` is a C boundary that disallows
+        -- coroutine yields. activeCatalog/getTargetPhotos/silentApplyJson
+        -- all may yield (selection inspection, catalog access, metadata
+        -- fetch). Use LrTasks.pcall — Lr's yield-safe error capture.
+        local okCat, currentCatalog = LrTasks.pcall(LrApplication.activeCatalog)
         if not okCat then
           logger:trace("自动检测: activeCatalog 抛错: " .. tostring(currentCatalog))
         else
           logger:trace("自动检测: activeCatalog ok")
-          local okSel, currentPhotos = pcall(function() return currentCatalog:getTargetPhotos() end)
+          local okSel, currentPhotos = LrTasks.pcall(function() return currentCatalog:getTargetPhotos() end)
           if not okSel then
             logger:trace("自动检测: getTargetPhotos 抛错: " .. tostring(currentPhotos))
           elseif currentPhotos and #currentPhotos > 0 then
             logger:trace("自动检测: 进入 silentApplyJson 前, photo 数=" .. #currentPhotos)
-            -- 注意:不使用 debug.traceback,Lr Lua sandbox 限制 debug 库访问会让 msgh 自身抛错
-            local ok, success, message = pcall(silentApplyJson, currentCatalog, currentPhotos, jsonPath)
+            local ok, success, message = LrTasks.pcall(silentApplyJson, currentCatalog, currentPhotos, jsonPath)
             if not ok then
-              logger:trace("自动检测异常 (pcall): " .. tostring(success))
+              logger:trace("自动检测异常 (LrTasks.pcall): " .. tostring(success))
             elseif success then
               logger:trace("自动检测成功: " .. tostring(message))
             else
