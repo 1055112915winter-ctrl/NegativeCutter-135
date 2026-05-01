@@ -944,22 +944,28 @@ local function startAutoWatch(jsonPath)
         logger:trace("自动检测: JSON 文件已更新，开始应用...")
 
         -- 每次处理时重新获取当前选中的照片
-        local currentCatalog = LrApplication.activeCatalog()
-        local currentPhotos = currentCatalog:getTargetPhotos()
-        if currentPhotos and #currentPhotos > 0 then
-          local ok, success, message = xpcall(
-            function() return silentApplyJson(currentCatalog, currentPhotos, jsonPath) end,
-            function(e) return tostring(e) .. "\n" .. debug.traceback("", 2) end
-          )
-          if not ok then
-            logger:trace("自动检测异常 (xpcall): " .. tostring(success))
-          elseif success then
-            logger:trace("自动检测成功: " .. tostring(message))
-          else
-            logger:trace("自动检测失败: " .. tostring(message))
-          end
+        local okCat, currentCatalog = pcall(LrApplication.activeCatalog)
+        if not okCat then
+          logger:trace("自动检测: activeCatalog 抛错: " .. tostring(currentCatalog))
         else
-          logger:trace("自动检测: 没有选中的照片，跳过")
+          logger:trace("自动检测: activeCatalog ok")
+          local okSel, currentPhotos = pcall(function() return currentCatalog:getTargetPhotos() end)
+          if not okSel then
+            logger:trace("自动检测: getTargetPhotos 抛错: " .. tostring(currentPhotos))
+          elseif currentPhotos and #currentPhotos > 0 then
+            logger:trace("自动检测: 进入 silentApplyJson 前, photo 数=" .. #currentPhotos)
+            -- 注意:不使用 debug.traceback,Lr Lua sandbox 限制 debug 库访问会让 msgh 自身抛错
+            local ok, success, message = pcall(silentApplyJson, currentCatalog, currentPhotos, jsonPath)
+            if not ok then
+              logger:trace("自动检测异常 (pcall): " .. tostring(success))
+            elseif success then
+              logger:trace("自动检测成功: " .. tostring(message))
+            else
+              logger:trace("自动检测失败: " .. tostring(message))
+            end
+          else
+            logger:trace("自动检测: 没有选中的照片，跳过")
+          end
         end
       end
     end
