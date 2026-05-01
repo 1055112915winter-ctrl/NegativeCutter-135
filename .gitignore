@@ -2,3 +2,6 @@
 *jpg
 .*swp
 *~
+
+# dev symlink for batch tests (points to ../../../test_files in master root)
+/test_files
