@@ -41,6 +41,14 @@ return {
       file = "StopWatch.lua",
     },
     {
+      title = "启动自动检测 (E2E)",
+      file = "AutoWatch.lua",
+    },
+    {
+      title = "停止自动检测 (E2E)",
+      file = "StopAutoWatch.lua",
+    },
+    {
       title = LOC "$$$/FilmCrop/Menu/Settings=设置...",
       file = "Settings.lua",
     },
@@ -75,10 +83,19 @@ return {
       title = "停止监视 FilmCrop JSON",
       file = "StopWatch.lua",
     },
+    {
+      title = "启动自动检测 (E2E)",
+      file = "AutoWatch.lua",
+    },
+    {
+      title = "停止自动检测 (E2E)",
+      file = "StopAutoWatch.lua",
+    },
   },
 
   LrPluginInMenu = "Library",
   LrPluginInMonitor = true,
+  LrInitPlugin = "Init.lua",
   LrShutdownPlugin = "Shutdown.lua",
   LrForceInitPlugin = true,
 

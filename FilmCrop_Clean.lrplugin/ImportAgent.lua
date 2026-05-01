@@ -807,10 +807,173 @@ local function watchJsonFile()
 end
 
 -- =====================================================================
+-- 自动检测模式（无对话框）
+-- =====================================================================
+local function parseJson(content)
+  local json = require("json")
+  local decodeOk, data = pcall(function() return json.decode(content) end)
+  if not decodeOk or type(data) ~= "table" then
+    return nil, "JSON 解析失败"
+  end
+  if not data.frames or #data.frames == 0 then
+    return nil, "未找到帧数据"
+  end
+  for _, frame in ipairs(data.frames) do
+    frame.top = frame.top or 0
+    frame.bottom = frame.bottom or (data.sourceHeight or 1024)
+    frame.left = frame.left or 0
+    frame.right = frame.right or (data.sourceWidth or 1024)
+    frame.relativeTop = frame.relativeTop or 0.0
+    frame.relativeBottom = frame.relativeBottom or 1.0
+    frame.relativeLeft = frame.relativeLeft or 0.0
+    frame.relativeRight = frame.relativeRight or 1.0
+  end
+  table.sort(data.frames, function(a, b) return (a.index or 0) < (b.index or 0) end)
+  return data
+end
+
+local function silentApplyJson(catalog, selectedPhotos, jsonPath)
+  local content = LrFileUtils.readFile(jsonPath)
+  if not content or content == "" then
+    return false, "无法读取 JSON 文件"
+  end
+
+  local data, err = parseJson(content)
+  if not data then
+    return false, err
+  end
+
+  -- 如果 JSON 指定了目标照片，过滤选中的照片
+  local targetBasename = data.targetBasename
+  local photosToProcess = selectedPhotos
+  if targetBasename and targetBasename ~= "" then
+    local filtered = {}
+    for _, photo in ipairs(selectedPhotos) do
+      local fileName = photo:getFormattedMetadata('fileName') or ""
+      local baseName = fileName:gsub("%..+$", "")
+      if baseName == targetBasename then
+        table.insert(filtered, photo)
+      end
+    end
+    if #filtered > 0 then
+      photosToProcess = filtered
+      logger:trace("自动检测: 过滤后处理 " .. #filtered .. " 张照片 (目标: " .. targetBasename .. ")")
+    else
+      logger:trace("自动检测: 未找到匹配目标照片 " .. targetBasename)
+      return false, "未找到匹配的目标照片: " .. targetBasename
+    end
+  end
+
+  local ProcessAgent = dofile(LrPathUtils.child(pluginPath, "ProcessAgent.lua"))
+  for _, photo in ipairs(photosToProcess) do
+    data = ProcessAgent.directionAlign(data, photo)
+  end
+
+  local existingCopies = buildExistingCopiesMap(catalog, photosToProcess)
+  local duplicateAction = "create"
+
+  local totalCreated = 0
+  local totalUpdated = 0
+  local totalSkipped = 0
+  local allErrors = {}
+
+  for _, photo in ipairs(photosToProcess) do
+    local w = data.sourceWidth or photo:getRawMetadata("width") or 1024
+    local h = data.sourceHeight or photo:getRawMetadata("height") or 1024
+    local created, errors, updated, skipped = createVirtualCopiesFromFrames(
+      catalog, photo, data.frames, w, h, data.cropAngle or 0, existingCopies, duplicateAction
+    )
+    totalCreated = totalCreated + created
+    totalUpdated = totalUpdated + updated
+    totalSkipped = totalSkipped + skipped
+    for _, e in ipairs(errors) do table.insert(allErrors, e) end
+  end
+
+  local msg = string.format("创建: %d, 更新: %d, 跳过: %d", totalCreated, totalUpdated, totalSkipped)
+  if #allErrors > 0 then
+    local errMsg = table.concat(allErrors, "\n")
+    if #errMsg > 300 then errMsg = string.sub(errMsg, 1, 300) .. "\n..." end
+    msg = msg .. "\n错误:\n" .. errMsg
+  end
+
+  return true, msg
+end
+
+local function startAutoWatch(jsonPath)
+  logger:trace("=== 自动检测模式 ===")
+
+  local LrApplicationView = import 'LrApplicationView'
+  if LrApplicationView.getCurrentModuleName() ~= "develop" then
+    logger:trace("自动检测: 不在 develop 模块，取消")
+    return false, "请在修改照片模块中运行"
+  end
+
+  local catalog = LrApplication.activeCatalog()
+  local selectedPhotos = catalog:getTargetPhotos()
+  if not selectedPhotos or #selectedPhotos == 0 then
+    logger:trace("自动检测: 未选择照片，取消")
+    return false, "未选择照片"
+  end
+
+  local LrPrefs = import 'LrPrefs'
+  local prefs = LrPrefs.prefsForPlugin()
+  prefs.autoWatchActive = true
+  prefs.autoWatchJsonPath = jsonPath
+
+  logger:trace("自动检测已启动，监视: " .. jsonPath)
+
+  LrTasks.startAsyncTask(function()
+    local lastModified = LrFileUtils.fileAttributes(jsonPath).fileModificationDate or 0
+    while prefs.autoWatchActive do
+      LrTasks.sleep(2)
+      if not prefs.autoWatchActive then break end
+
+      local attrs = LrFileUtils.fileAttributes(jsonPath)
+      if attrs and attrs.fileModificationDate and attrs.fileModificationDate > lastModified then
+        lastModified = attrs.fileModificationDate
+        logger:trace("自动检测: JSON 文件已更新，开始应用...")
+
+        -- 每次处理时重新获取当前选中的照片
+        local currentCatalog = LrApplication.activeCatalog()
+        local currentPhotos = currentCatalog:getTargetPhotos()
+        if currentPhotos and #currentPhotos > 0 then
+          local success, message = silentApplyJson(currentCatalog, currentPhotos, jsonPath)
+          if success then
+            logger:trace("自动检测成功: " .. tostring(message))
+          else
+            logger:trace("自动检测失败: " .. tostring(message))
+          end
+        else
+          logger:trace("自动检测: 没有选中的照片，跳过")
+        end
+      end
+    end
+
+    prefs.autoWatchActive = false
+    prefs.autoWatchJsonPath = nil
+    logger:trace("自动检测已终止")
+  end)
+
+  return true, "自动检测已启动"
+end
+
+local function stopAutoWatch()
+  local LrPrefs = import 'LrPrefs'
+  local prefs = LrPrefs.prefsForPlugin()
+  prefs.autoWatchActive = false
+  prefs.autoWatchJsonPath = nil
+  logger:trace("自动检测已停止")
+end
+
+-- =====================================================================
 -- 导出接口
 -- =====================================================================
 return {
   importFromXMP = importFromXMP,
   detectViaHttp = detectViaHttp,
   watchJsonFile = watchJsonFile,
+  silentApplyJson = silentApplyJson,
+  startAutoWatch = startAutoWatch,
+  stopAutoWatch = stopAutoWatch,
+  createVirtualCopiesFromFrames = createVirtualCopiesFromFrames,
 }

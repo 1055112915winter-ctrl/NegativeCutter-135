@@ -14,6 +14,10 @@ if prefs.watchActive then
   prefs.watchActive = false
   prefs.watchJsonPath = nil
   logger:trace("FilmCrop 插件已关闭，JSON 监视状态已清除")
-else
-  logger:trace("FilmCrop 插件已关闭")
 end
+if prefs.autoWatchActive then
+  prefs.autoWatchActive = false
+  prefs.autoWatchJsonPath = nil
+  logger:trace("FilmCrop 插件已关闭，自动检测状态已清除")
+end
+logger:trace("FilmCrop 插件已关闭")
