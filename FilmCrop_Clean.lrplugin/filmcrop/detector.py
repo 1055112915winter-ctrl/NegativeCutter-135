@@ -1136,57 +1136,27 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         frame["relativeLeft"] = round(orig_left / orig_w, 6) if orig_w > 0 else 0.0
         frame["relativeRight"] = round(orig_right / orig_w, 6) if orig_w > 0 else 1.0
 
-    # --- Enforce strict 3:2 / 2:3 aspect ratio on MIDDLE frames only ---
-    # First and last frames may be truncated by scan edges; we only force
-    # exact ratio on the complete middle frames.
+    # --- Enforce strict 3:2 / 2:3 aspect ratio ---
+    # Compute unified scan dimension from middle frames' available space,
+    # then apply to all frames. Frames that can't fit get their own
+    # proportional size. Minimum gap enforcement prevents overlap.
     if aspect_ratio and len(frames) > 0:
         n = len(frames) - 1
 
-        # Collect scan-direction dimensions for MIDDLE frames only (index 1..n-1)
+        # Collect scan-direction dimensions for MIDDLE frames (most reliable)
         middle_scan_dims = []
         for i in range(1, n):
             if is_horizontal:
-                left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
-                    orig_chosen_edges[i - 1][1] if i > 0 else 0
-                )
-                right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
-                    orig_chosen_edges[i][0] if i < n else orig_w
-                )
+                left_b = orig_chosen_edges[i - 1][1] if i > 0 else 0
+                right_b = orig_chosen_edges[i][0] if i < n else orig_w
                 middle_scan_dims.append(right_b - left_b)
             else:
-                top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
-                    orig_chosen_edges[i - 1][1] if i > 0 else 0
-                )
-                bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
-                    orig_chosen_edges[i][0] if i < n else orig_h
-                )
+                top_b = orig_chosen_edges[i - 1][1] if i > 0 else 0
+                bottom_b = orig_chosen_edges[i][0] if i < n else orig_h
                 middle_scan_dims.append(bottom_b - top_b)
 
-        if middle_scan_dims:
-            unified_scan_dim = int(np.median(middle_scan_dims))
-        else:
-            # Fallback: only 2 frames, compute from available frames
-            all_scan_dims = []
-            for i in range(len(frames)):
-                if is_horizontal:
-                    left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
-                        orig_chosen_edges[i - 1][1] if i > 0 else 0
-                    )
-                    right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
-                        orig_chosen_edges[i][0] if i < n else orig_w
-                    )
-                    all_scan_dims.append(right_b - left_b)
-                else:
-                    top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
-                        orig_chosen_edges[i - 1][1] if i > 0 else 0
-                    )
-                    bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
-                        orig_chosen_edges[i][0] if i < n else orig_h
-                    )
-                    all_scan_dims.append(bottom_b - top_b)
-            unified_scan_dim = int(np.median(all_scan_dims)) if all_scan_dims else 0
-
-        unified_cross_dim = int(round(unified_scan_dim / aspect_ratio))
+        unified_scan_dim = int(np.min(middle_scan_dims)) if middle_scan_dims else 0
+        unified_cross_dim = int(round(unified_scan_dim / aspect_ratio)) if unified_scan_dim > 0 else 0
 
         # If image doesn't have enough cross-space, shrink scan-dim to fit
         if unified_cross_dim > orig_cross_size:
@@ -1203,50 +1173,13 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
             new_near = max(0, new_far - unified_cross_dim)
         orig_long_edges = (new_near, new_far)
 
-        # Rebuild MIDDLE frames with unified dimensions
-        for i, fr in enumerate(frames):
-            is_middle = (0 < i < n)
-            if not is_middle:
-                # First / last frame: keep original scan dim, but use unified width
-                # (do NOT shrink width when height is truncated)
-                if is_horizontal:
-                    left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
-                        orig_chosen_edges[i - 1][1] if i > 0 else 0
-                    )
-                    right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
-                        orig_chosen_edges[i][0] if i < n else orig_w
-                    )
-                    new_left = max(0, left_b)
-                    new_right = min(orig_w, right_b)
-                    fr["left"] = int(new_left * scan_scale)
-                    fr["right"] = int(new_right * scan_scale)
-                    fr["top"] = int(orig_long_edges[0] * cross_scale)
-                    fr["bottom"] = int(orig_long_edges[1] * cross_scale)
-                    fr["relativeLeft"] = round(new_left / orig_w, 6) if orig_w > 0 else 0.0
-                    fr["relativeRight"] = round(new_right / orig_w, 6) if orig_w > 0 else 1.0
-                    fr["relativeTop"] = round(orig_long_edges[0] / orig_h, 6) if orig_h > 0 else 0.0
-                    fr["relativeBottom"] = round(orig_long_edges[1] / orig_h, 6) if orig_h > 0 else 1.0
-                    fr["frameWidth"] = new_right - new_left
-                else:
-                    top_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
-                        orig_chosen_edges[i - 1][1] if i > 0 else 0
-                    )
-                    bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
-                        orig_chosen_edges[i][0] if i < n else orig_h
-                    )
-                    new_top = max(0, top_b)
-                    new_bottom = min(orig_h, bottom_b)
-                    fr["top"] = int(new_top * scan_scale)
-                    fr["bottom"] = int(new_bottom * scan_scale)
-                    fr["left"] = int(orig_long_edges[0] * cross_scale)
-                    fr["right"] = int(orig_long_edges[1] * cross_scale)
-                    fr["relativeTop"] = round(new_top / orig_h, 6) if orig_h > 0 else 0.0
-                    fr["relativeBottom"] = round(new_bottom / orig_h, 6) if orig_h > 0 else 1.0
-                    fr["relativeLeft"] = round(orig_long_edges[0] / orig_w, 6) if orig_w > 0 else 0.0
-                    fr["relativeRight"] = round(orig_long_edges[1] / orig_w, 6) if orig_w > 0 else 1.0
-                    fr["frameWidth"] = new_bottom - new_top
-                continue
+        # Gap widths used as minimum separation between frames
+        min_gaps = [re - le for le, re in orig_chosen_edges]
+        prev_bottom = None
 
+        # Rebuild ALL frames with unified dimensions.
+        # Frames that can't fit unified_scan_dim get their own 2:3 proportional size.
+        for i, fr in enumerate(frames):
             if is_horizontal:
                 left_b = first_offset_raw if (i == 0 and first_offset_raw is not None) else (
                     orig_chosen_edges[i - 1][1] if i > 0 else 0
@@ -1254,12 +1187,20 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                 right_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
                     orig_chosen_edges[i][0] if i < n else orig_w
                 )
-                center_scan = (left_b + right_b) // 2
-                new_left = max(0, center_scan - unified_scan_dim // 2)
-                new_right = min(orig_w, new_left + unified_scan_dim)
-                if new_right > orig_w:
-                    new_right = orig_w
-                    new_left = max(0, new_right - unified_scan_dim)
+                available = right_b - left_b
+                scan_dim = unified_scan_dim if available >= unified_scan_dim else available
+
+                new_left = left_b
+                new_right = min(right_b, new_left + scan_dim)
+
+                # Enforce minimum gap from previous frame (horizontal)
+                if i > 0 and prev_bottom is not None and i - 1 < len(min_gaps):
+                    mingap = max(1, min_gaps[i - 1])
+                    if new_left < prev_bottom + mingap:
+                        new_left = prev_bottom + mingap
+                        new_right = min(right_b, new_left + scan_dim)
+
+                prev_bottom = new_right
 
                 fr["left"] = int(new_left * scan_scale)
                 fr["right"] = int(new_right * scan_scale)
@@ -1277,21 +1218,42 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                 bottom_b = last_offset_raw if (i == n and last_offset_raw is not None) else (
                     orig_chosen_edges[i][0] if i < n else orig_h
                 )
-                center_scan = (top_b + bottom_b) // 2
-                new_top = max(0, center_scan - unified_scan_dim // 2)
-                new_bottom = min(orig_h, new_top + unified_scan_dim)
-                if new_bottom > orig_h:
-                    new_bottom = orig_h
-                    new_top = max(0, new_bottom - unified_scan_dim)
+                available = bottom_b - top_b
+                scan_dim = unified_scan_dim if available >= unified_scan_dim else available
+                cross_dim = int(round(scan_dim / aspect_ratio))
+                cross_dim = min(cross_dim, orig_cross_size)
+
+                new_top = top_b
+                new_bottom = min(bottom_b, new_top + scan_dim)
+
+                # Enforce minimum gap from previous frame
+                if i > 0 and prev_bottom is not None and i - 1 < len(min_gaps):
+                    mingap = max(1, min_gaps[i - 1])
+                    if new_top < prev_bottom + mingap:
+                        new_top = prev_bottom + mingap
+                        new_bottom = min(bottom_b, new_top + scan_dim)
+
+                prev_bottom = new_bottom
+
+                # If this frame uses its own scan_dim, also use its own cross_dim
+                if scan_dim != unified_scan_dim:
+                    cross_center = (orig_long_edges[0] + orig_long_edges[1]) // 2
+                    cf_near = max(0, cross_center - cross_dim // 2)
+                    cf_far = min(orig_cross_size, cf_near + cross_dim)
+                    if cf_far > orig_cross_size:
+                        cf_far = orig_cross_size
+                        cf_near = max(0, cf_far - cross_dim)
+                else:
+                    cf_near, cf_far = orig_long_edges
 
                 fr["top"] = int(new_top * scan_scale)
                 fr["bottom"] = int(new_bottom * scan_scale)
-                fr["left"] = int(orig_long_edges[0] * cross_scale)
-                fr["right"] = int(orig_long_edges[1] * cross_scale)
+                fr["left"] = int(cf_near * cross_scale)
+                fr["right"] = int(cf_far * cross_scale)
                 fr["relativeTop"] = round(new_top / orig_h, 6) if orig_h > 0 else 0.0
                 fr["relativeBottom"] = round(new_bottom / orig_h, 6) if orig_h > 0 else 1.0
-                fr["relativeLeft"] = round(orig_long_edges[0] / orig_w, 6) if orig_w > 0 else 0.0
-                fr["relativeRight"] = round(orig_long_edges[1] / orig_w, 6) if orig_w > 0 else 1.0
+                fr["relativeLeft"] = round(cf_near / orig_w, 6) if orig_w > 0 else 0.0
+                fr["relativeRight"] = round(cf_far / orig_w, 6) if orig_w > 0 else 1.0
                 fr["frameWidth"] = new_bottom - new_top
 
         # Update thumbnail-space long edges for debug output
