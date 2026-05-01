@@ -833,15 +833,18 @@ local function parseJson(content)
 end
 
 local function silentApplyJson(catalog, selectedPhotos, jsonPath)
+  logger:trace("silentApplyJson: 入口, jsonPath=" .. tostring(jsonPath) .. ", selected=" .. tostring(#selectedPhotos))
   local content = LrFileUtils.readFile(jsonPath)
   if not content or content == "" then
     return false, "无法读取 JSON 文件"
   end
+  logger:trace("silentApplyJson: readFile 完成, len=" .. #content)
 
   local data, err = parseJson(content)
   if not data then
     return false, err
   end
+  logger:trace("silentApplyJson: parseJson 完成, frames=" .. tostring(data.frames and #data.frames or 0) .. ", target=" .. tostring(data.targetBasename))
 
   -- 如果 JSON 指定了目标照片，过滤选中的照片
   local targetBasename = data.targetBasename
@@ -849,7 +852,11 @@ local function silentApplyJson(catalog, selectedPhotos, jsonPath)
   if targetBasename and targetBasename ~= "" then
     local filtered = {}
     for _, photo in ipairs(selectedPhotos) do
-      local fileName = photo:getFormattedMetadata('fileName') or ""
+      local okMeta, fileName = pcall(function() return photo:getFormattedMetadata('fileName') end)
+      if not okMeta then
+        logger:trace("silentApplyJson: getFormattedMetadata 抛错: " .. tostring(fileName))
+      end
+      fileName = (okMeta and fileName) or ""
       local baseName = fileName:gsub("%..+$", "")
       if baseName == targetBasename then
         table.insert(filtered, photo)
@@ -864,10 +871,13 @@ local function silentApplyJson(catalog, selectedPhotos, jsonPath)
     end
   end
 
+  logger:trace("silentApplyJson: 加载 ProcessAgent")
   local ProcessAgent = dofile(LrPathUtils.child(pluginPath, "ProcessAgent.lua"))
+  logger:trace("silentApplyJson: ProcessAgent 加载完成, 进入 directionAlign")
   for _, photo in ipairs(photosToProcess) do
     data = ProcessAgent.directionAlign(data, photo)
   end
+  logger:trace("silentApplyJson: directionAlign 完成")
 
   local existingCopies = buildExistingCopiesMap(catalog, photosToProcess)
   local duplicateAction = "create"
@@ -937,8 +947,13 @@ local function startAutoWatch(jsonPath)
         local currentCatalog = LrApplication.activeCatalog()
         local currentPhotos = currentCatalog:getTargetPhotos()
         if currentPhotos and #currentPhotos > 0 then
-          local success, message = silentApplyJson(currentCatalog, currentPhotos, jsonPath)
-          if success then
+          local ok, success, message = xpcall(
+            function() return silentApplyJson(currentCatalog, currentPhotos, jsonPath) end,
+            function(e) return tostring(e) .. "\n" .. debug.traceback("", 2) end
+          )
+          if not ok then
+            logger:trace("自动检测异常 (xpcall): " .. tostring(success))
+          elseif success then
             logger:trace("自动检测成功: " .. tostring(message))
           else
             logger:trace("自动检测失败: " .. tostring(message))
