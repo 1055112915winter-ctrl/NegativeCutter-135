@@ -51,53 +51,56 @@ function ProcessAgent.findPythonPath()
 end
 
 -- ------------------------------------------------------------------
--- parseJSON — 解析 detect_thumb.py 的 stdout JSON
+-- parseJSON — 解析 detect_thumb.py 的 stdout JSON (uses require("json"))
 -- ------------------------------------------------------------------
 function ProcessAgent.parseJSON(jsonStr)
-  local result = {}
-  local cleanStr = jsonStr:gsub("%s+", " ")
+  local emptyResult = {
+    frameCount = 0, sourceWidth = 0, sourceHeight = 0,
+    cropAngle = 0.0, isHorizontal = false, frames = {},
+  }
+  if type(jsonStr) ~= "string" or jsonStr == "" then return emptyResult end
 
-  result.frameCount = tonumber(cleanStr:match('"frameCount"%s*:%s*(%d+)')) or 0
-  result.sourceWidth = tonumber(cleanStr:match('"sourceWidth"%s*:%s*(%d+)')) or 0
-  result.sourceHeight = tonumber(cleanStr:match('"sourceHeight"%s*:%s*(%d+)')) or 0
-  result.cropAngle = tonumber(cleanStr:match('"cropAngle"%s*:%s*([%-%d%.]+)')) or 0.0
+  local json = require("json")
+  local ok, raw = pcall(function() return json.decode(jsonStr) end)
+  if not ok or type(raw) ~= "table" then return emptyResult end
 
-  local debugSection = cleanStr:match('"debug"%s*:%s*(%b{})')
-  if debugSection then
-    local isH = debugSection:match('"isHorizontal"%s*:%s*(true|false)')
-    if isH == "true" then
-      result.isHorizontal = true
-    elseif isH == "false" then
-      result.isHorizontal = false
-    end
-  end
-  if result.isHorizontal == nil then
-    result.isHorizontal = (result.sourceWidth or 0) >= (result.sourceHeight or 0)
+  local result = {
+    frameCount   = tonumber(raw.frameCount) or 0,
+    sourceWidth  = tonumber(raw.sourceWidth) or 0,
+    sourceHeight = tonumber(raw.sourceHeight) or 0,
+    cropAngle    = tonumber(raw.cropAngle) or 0.0,
+    error        = raw.error,
+    _diag        = raw._diag,
+  }
+
+  if type(raw.debug) == "table" and type(raw.debug.isHorizontal) == "boolean" then
+    result.isHorizontal = raw.debug.isHorizontal
+  else
+    result.isHorizontal = result.sourceWidth >= result.sourceHeight
   end
 
   result.frames = {}
-  local framesSection = cleanStr:match('"frames"%s*:%s*(%[.-%])')
-  if framesSection then
-    for frameStr in framesSection:gmatch('%b{}') do
-      local frame = {}
-      frame.index = tonumber(frameStr:match('"index"%s*:%s*(%d+)'))
-      frame.top = tonumber(frameStr:match('"top"%s*:%s*(%d+)'))
-      frame.bottom = tonumber(frameStr:match('"bottom"%s*:%s*(%d+)'))
-      frame.left = tonumber(frameStr:match('"left"%s*:%s*(%d+)'))
-      frame.right = tonumber(frameStr:match('"right"%s*:%s*(%d+)'))
-      frame.relativeTop = tonumber(frameStr:match('"relativeTop"%s*:%s*([%d%.]+)')) or 0.0
-      frame.relativeBottom = tonumber(frameStr:match('"relativeBottom"%s*:%s*([%d%.]+)')) or 1.0
-      frame.relativeLeft = tonumber(frameStr:match('"relativeLeft"%s*:%s*([%d%.]+)'))
-      frame.relativeRight = tonumber(frameStr:match('"relativeRight"%s*:%s*([%d%.]+)'))
-
-      if not frame.relativeLeft then
-        frame.relativeLeft = (frame.left or 0) / (result.sourceWidth > 0 and result.sourceWidth or 1)
-      end
-      if not frame.relativeRight then
-        frame.relativeRight = (frame.right or (result.sourceWidth or 1024)) / (result.sourceWidth > 0 and result.sourceWidth or 1)
-      end
-
-      if frame.index and frame.top and frame.bottom then
+  if type(raw.frames) == "table" then
+    local sw = result.sourceWidth > 0 and result.sourceWidth or 1
+    for _, f in ipairs(raw.frames) do
+      if type(f) == "table" and f.index and f.top and f.bottom then
+        local frame = {
+          index          = tonumber(f.index),
+          top            = tonumber(f.top),
+          bottom         = tonumber(f.bottom),
+          left           = tonumber(f.left),
+          right          = tonumber(f.right),
+          relativeTop    = tonumber(f.relativeTop) or 0.0,
+          relativeBottom = tonumber(f.relativeBottom) or 1.0,
+          relativeLeft   = tonumber(f.relativeLeft),
+          relativeRight  = tonumber(f.relativeRight),
+        }
+        if not frame.relativeLeft then
+          frame.relativeLeft = (frame.left or 0) / sw
+        end
+        if not frame.relativeRight then
+          frame.relativeRight = (frame.right or sw) / sw
+        end
         table.insert(result.frames, frame)
       end
     end
