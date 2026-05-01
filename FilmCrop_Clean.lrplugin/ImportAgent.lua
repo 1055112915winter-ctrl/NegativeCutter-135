@@ -854,11 +854,11 @@ local function silentApplyJson(catalog, selectedPhotos, jsonPath)
   if targetBasename and targetBasename ~= "" then
     local filtered = {}
     for _, photo in ipairs(selectedPhotos) do
-      local okMeta, fileName = pcall(function() return photo:getFormattedMetadata('fileName') end)
-      if not okMeta then
-        logger:trace("silentApplyJson: getFormattedMetadata 抛错: " .. tostring(fileName))
-      end
-      fileName = (okMeta and fileName) or ""
+      -- NOTE: photo:getFormattedMetadata is a yielding LR call. Wrapping it
+      -- in pcall raises "Yielding is not allowed within a C or metamethod
+      -- call". The async task is already inside startAsyncTask which is
+      -- yield-safe; let exceptions surface to the outer pcall in startAutoWatch.
+      local fileName = photo:getFormattedMetadata('fileName') or ""
       local baseName = fileName:gsub("%..+$", "")
       if baseName == targetBasename then
         table.insert(filtered, photo)
