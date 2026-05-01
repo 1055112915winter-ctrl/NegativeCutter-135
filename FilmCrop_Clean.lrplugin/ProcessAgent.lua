@@ -14,6 +14,11 @@ local LrPrefs = import 'LrPrefs'
 local pluginPath = _PLUGIN.path
 local WORK_DIR = LrPathUtils.child(LrPathUtils.getStandardFilePath("temp"), "filmcrop")
 
+-- Lr Lua sandbox does NOT register a `json` toolkit script; require("json")
+-- fails with "Could not load toolkit script: json". Load the bundled pure-
+-- Lua decoder via dofile instead.
+local json = dofile(LrPathUtils.child(pluginPath, "json.lua"))
+
 local ThumbnailAgent = dofile(LrPathUtils.child(pluginPath, "ThumbnailAgent.lua"))
 local ApplierAgent = dofile(LrPathUtils.child(pluginPath, "ApplierAgent.lua"))
 
@@ -60,7 +65,6 @@ function ProcessAgent.parseJSON(jsonStr)
   }
   if type(jsonStr) ~= "string" or jsonStr == "" then return emptyResult end
 
-  local json = require("json")
   local ok, raw = pcall(function() return json.decode(jsonStr) end)
   if not ok or type(raw) ~= "table" then return emptyResult end
 

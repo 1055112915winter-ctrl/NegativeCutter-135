@@ -19,6 +19,12 @@ logger:enable("logfile")
 local pluginPath = _PLUGIN.path
 local WORK_DIR = LrPathUtils.child(LrPathUtils.getStandardFilePath("temp"), "filmcrop")
 
+-- Lr Lua sandbox does NOT register a `json` toolkit script; require("json")
+-- fails with "Could not load toolkit script: json". Load the bundled pure-
+-- Lua decoder via dofile instead — this is the same mechanism we already
+-- use for ProcessAgent.lua / ApplierAgent.lua.
+local json = dofile(LrPathUtils.child(pluginPath, "json.lua"))
+
 -- =====================================================================
 -- 公共: 创建虚拟副本并应用裁剪
 -- =====================================================================
@@ -185,7 +191,6 @@ except Exception:
     LrFileUtils.delete(tempOut)
   end)
 
-  local json = require("json")
   local decodeOk, result = pcall(function() return json.decode(output) end)
   if decodeOk and type(result) == "table" then
     return result
@@ -532,7 +537,6 @@ local function detectViaHttp()
     local httpOk, httpErr = pcall(function()
       local http = require("socket.http")
       local ltn12 = require("ltn12")
-      local json = require("json")
       local reqBody = json.encode({
         image_path = originalPath,
         expected_frames = expectedFrames,
@@ -651,7 +655,6 @@ local function watchJsonFile()
   jsonPath = jsonPath[1]
 
   local function parseJson(content)
-    local json = require("json")
     local decodeOk, data = pcall(function() return json.decode(content) end)
     if not decodeOk or type(data) ~= "table" then
       return nil, "JSON 解析失败"
@@ -810,7 +813,6 @@ end
 -- 自动检测模式（无对话框）
 -- =====================================================================
 local function parseJson(content)
-  local json = require("json")
   local decodeOk, data = pcall(function() return json.decode(content) end)
   if not decodeOk or type(data) ~= "table" then
     return nil, "JSON 解析失败"

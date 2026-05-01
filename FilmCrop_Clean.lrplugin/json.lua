@@ -3,8 +3,9 @@
 
   Lightroom Classic ships JSON.lua (uppercase, method-call API) but does
   NOT register a `json` toolkit script — `require("json")` fails with
-  "Could not load toolkit script: json". This file shims that gap so
-  ImportAgent.lua and ProcessAgent.lua can use require("json").decode().
+  "Could not load toolkit script: json". Plugin code loads this file via
+  `dofile(LrPathUtils.child(pluginPath, "json.lua"))` (see ImportAgent.lua
+  and ProcessAgent.lua module-level loaders) instead of require().
 
   Scope: covers the JSON shapes produced by detect_thumb.py and the
   filmcrop_e2e.json watch sidecar — objects, arrays, numbers (int/float/
@@ -111,5 +112,65 @@ function M.decode(s)
   local val = parse_value(s, 1)
   return val
 end
+
+-- Minimal encode for the HTTP API request body in ImportAgent (line 535).
+-- Supports: nil, boolean, number, string (no \uXXXX), table (array if 1..#t
+-- contiguous numeric keys, object otherwise). Strings are escaped for ", \,
+-- and control chars 0x00-0x1F per JSON spec; everything else passes through.
+local encode_value
+local function encode_string(s)
+  local r = s:gsub('[\\"%z\1-\31]', function(c)
+    if c == '\\' then return '\\\\' end
+    if c == '"' then return '\\"' end
+    if c == '\n' then return '\\n' end
+    if c == '\r' then return '\\r' end
+    if c == '\t' then return '\\t' end
+    if c == '\b' then return '\\b' end
+    if c == '\f' then return '\\f' end
+    return string.format('\\u%04x', c:byte())
+  end)
+  return '"' .. r .. '"'
+end
+
+local function is_array(t)
+  local n = 0
+  for k in pairs(t) do
+    if type(k) ~= "number" then return false end
+    n = n + 1
+  end
+  for i = 1, n do
+    if t[i] == nil then return false end
+  end
+  return n
+end
+
+encode_value = function(v)
+  local tv = type(v)
+  if v == nil then return "null"
+  elseif tv == "boolean" then return v and "true" or "false"
+  elseif tv == "number" then
+    if v ~= v or v == math.huge or v == -math.huge then
+      error("json.encode: NaN/Inf not allowed")
+    end
+    return tostring(v)
+  elseif tv == "string" then return encode_string(v)
+  elseif tv == "table" then
+    local n = is_array(v)
+    if n then
+      local parts = {}
+      for i = 1, n do parts[i] = encode_value(v[i]) end
+      return "[" .. table.concat(parts, ",") .. "]"
+    end
+    local parts = {}
+    for k, vv in pairs(v) do
+      if type(k) ~= "string" then error("json.encode: object keys must be strings") end
+      parts[#parts + 1] = encode_string(k) .. ":" .. encode_value(vv)
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+  end
+  error("json.encode: unsupported type " .. tv)
+end
+
+function M.encode(v) return encode_value(v) end
 
 return M
