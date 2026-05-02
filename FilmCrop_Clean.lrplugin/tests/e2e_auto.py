@@ -102,11 +102,14 @@ class LightroomController:
         self._osascript(f'tell application "{self.app_name}" to activate')
 
     def switch_to_develop(self):
+        # LR Classic 切 Develop 模块的快捷键是单字母 D(无 modifier)。
+        # Cmd+D 实际是 "取消选中" (Edit > Deselect),触发不到模块切换,
+        # 导致 ApplierAgent 在 Library 模块里 applyDevelopSettings 直接拒绝。
         script = f'''
 tell application "{self.app_name}"
     activate
     tell application "System Events"
-        keystroke "d" using command down
+        keystroke "d"
         delay 0.5
     end tell
 end tell
