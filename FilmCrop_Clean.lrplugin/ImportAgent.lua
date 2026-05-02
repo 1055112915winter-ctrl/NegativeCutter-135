@@ -830,6 +830,16 @@ local function parseJson(content)
     frame.relativeLeft = frame.relativeLeft or 0.0
     frame.relativeRight = frame.relativeRight or 1.0
   end
+  -- detect_thumb.py emits isHorizontal inside `debug`, not at top level.
+  -- directionAlign reads `data.isHorizontal` directly; if nil, `nil ~= false`
+  -- on vertical strips wrongly triggers axis swap. Lift / fallback here.
+  if data.isHorizontal == nil then
+    if data.debug and type(data.debug.isHorizontal) == "boolean" then
+      data.isHorizontal = data.debug.isHorizontal
+    else
+      data.isHorizontal = (data.sourceWidth or 0) >= (data.sourceHeight or 0)
+    end
+  end
   table.sort(data.frames, function(a, b) return (a.index or 0) < (b.index or 0) end)
   return data
 end
