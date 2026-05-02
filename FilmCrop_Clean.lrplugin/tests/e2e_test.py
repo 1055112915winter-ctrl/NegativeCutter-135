@@ -448,8 +448,8 @@ def run_e2e_test(catalog_path, test_photos_dir, photo_name=None):
         crop_right = settings.get('CropRight', -1)
         crop_angle = settings.get('CropAngle', 0)
 
-        has_crop = (crop_top != -1 and crop_bottom != -1 and
-                    crop_left != -1 and crop_right != -1)
+        has_crop = (crop_top != -1 or crop_bottom != -1 or
+                    crop_left != -1 or crop_right != -1)
 
         status = "OK" if has_crop else "FAIL"
         print(f"    {vc_name or f'副本_{vc_id}'}: crop=({crop_top:.4f}, {crop_bottom:.4f}, "

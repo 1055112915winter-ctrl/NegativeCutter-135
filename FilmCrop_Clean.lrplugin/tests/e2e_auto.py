@@ -423,7 +423,9 @@ def run_auto_test(catalog_path, wait_seconds=90, photo_name=None):
             vc_id, vc_name, vc_master, vc_file = vc
             settings = verifier_after.get_develop_settings(vc_id)
             crop_keys = ['CropTop', 'CropBottom', 'CropLeft', 'CropRight']
-            has_crop = all(k in settings for k in crop_keys)
+            # 默认值不会被 LR 写入 develop 文本（CropTop=0/CropBottom=1/CropLeft=0/CropRight=1）
+            # 所以"裁剪已应用"的判定是：至少一个 crop key 有非默认值
+            has_crop = any(k in settings for k in crop_keys)
             crop_str = f"crop=({settings.get('CropTop',-1):.4f}, {settings.get('CropBottom',-1):.4f}, " \
                        f"{settings.get('CropLeft',-1):.4f}, {settings.get('CropRight',-1):.4f})"
             status = "OK" if has_crop else "FAIL(无裁剪)"
