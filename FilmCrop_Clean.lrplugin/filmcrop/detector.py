@@ -1144,6 +1144,19 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     )
     orig_long_edges = refined if refined else orig_prev_long_edges
 
+    # Symmetry fallback: if one long-edge margin is clearly detected but the
+    # other is almost zero, mirror the larger margin to both sides.
+    # This handles cases where the film edge on one side (often the right)
+    # has low contrast and the detector misses it, leaving a visible
+    # unexposed film-base strip in the crop.
+    if orig_long_edges != (0, orig_cross_size):
+        left_margin = orig_long_edges[0]
+        right_margin = orig_cross_size - orig_long_edges[1]
+        margin_diff = abs(left_margin - right_margin)
+        if margin_diff > max(10, int(orig_cross_size * 0.02)) and max(left_margin, right_margin) > 5:
+            max_margin = max(left_margin, right_margin)
+            orig_long_edges = (max_margin, orig_cross_size - max_margin)
+
     # Scan-edge detection on original image projection (use unsmoothed for sharper edges)
     first_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=False)
     last_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=True)

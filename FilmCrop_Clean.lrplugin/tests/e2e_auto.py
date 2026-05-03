@@ -329,6 +329,10 @@ def generate_json_for_photo(photo_path, expected_frames=6):
     basename = os.path.splitext(os.path.basename(photo_path))[0]
     data['targetBasename'] = basename
 
+    # 添加目标照片信息（用于 AutoWatch 匹配）
+    basename = os.path.splitext(os.path.basename(photo_path))[0]
+    data['targetBasename'] = basename
+
     # 写入 JSON 文件（触发 AutoWatch）
     with open(AUTO_JSON_PATH, 'w') as f:
         json.dump(data, f, indent=2)
