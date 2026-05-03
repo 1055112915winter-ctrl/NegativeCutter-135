@@ -72,20 +72,11 @@ function ApplierAgent.applyCrop(photo, cropRegion)
   -- 注意: 不能在 pcall 中调用 applyDevelopSettings，因为它内部会 yield
   -- 必须在 withWriteAccessDo 块中直接调用
   -- 关键: 每次修改裁剪框时必须同步禁用 Upright，否则 Lightroom 会自动重算透视校正
-  local centerX = (left + right) / 2
-  local centerY = (top + bottom) / 2
-  local cropW = right - left
-  local cropH = bottom - top
-
   local settings = {
     CropTop = top,
     CropBottom = bottom,
     CropLeft = left,
     CropRight = right,
-    CropCenterX = centerX,
-    CropCenterY = centerY,
-    CropWidth = cropW,
-    CropHeight = cropH,
     CropAngle = cropRegion.cropAngle or 0,
     CropConstrainToWarp = 0,
     PerspectiveVertical = 0,
@@ -189,10 +180,6 @@ function ApplierAgent.resetCrop(photo)
     CropBottom = 1,
     CropLeft = 0,
     CropRight = 1,
-    CropCenterX = 0.5,
-    CropCenterY = 0.5,
-    CropWidth = 1,
-    CropHeight = 1,
     CropAngle = 0,
     CropConstrainToWarp = 0,
     PerspectiveVertical = 0,
