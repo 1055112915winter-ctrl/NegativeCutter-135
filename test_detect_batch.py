@@ -102,7 +102,7 @@ def main() -> int:
         gap_pass = m["gap_diff"] <= 500
         cv_pass = m["cv"] <= 5.0
         prop_pass = m["prop_deviation"] <= 5.0
-        ratio_pass = m["max_ratio_err"] <= 5.0
+        ratio_pass = m["max_ratio_err"] <= 1.0
 
         status = "PASS" if (gap_pass and cv_pass and prop_pass and ratio_pass) else "FAIL"
         if status == "FAIL":
