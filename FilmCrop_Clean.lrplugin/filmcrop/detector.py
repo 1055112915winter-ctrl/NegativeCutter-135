@@ -1386,6 +1386,28 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         # Update thumbnail-space long edges for debug output
         long_edges = (int(orig_long_edges[0] * cross_scale), int(orig_long_edges[1] * cross_scale))
 
+    # Aggressive tighten: halve the margin to eliminate remaining visible
+    # film-base strip.  Keep a minimum 10 px safety buffer to avoid cutting
+    # into actual image content.
+    if orig_long_edges != (0, orig_cross_size):
+        margin = orig_long_edges[0]
+        if margin > 10:
+            tightened = max(5, int(margin * 0.3))
+            orig_long_edges = (tightened, orig_cross_size - tightened)
+            long_edges = (int(orig_long_edges[0] * cross_scale), int(orig_long_edges[1] * cross_scale))
+            # Re-apply tightened long edges to all frames
+            for fr in frames:
+                if is_horizontal:
+                    fr["top"] = int(orig_long_edges[0] * cross_scale)
+                    fr["bottom"] = int(orig_long_edges[1] * cross_scale)
+                    fr["relativeTop"] = round(orig_long_edges[0] / orig_h, 6) if orig_h > 0 else 0.0
+                    fr["relativeBottom"] = round(orig_long_edges[1] / orig_h, 6) if orig_h > 0 else 1.0
+                else:
+                    fr["left"] = int(orig_long_edges[0] * cross_scale)
+                    fr["right"] = int(orig_long_edges[1] * cross_scale)
+                    fr["relativeLeft"] = round(orig_long_edges[0] / orig_w, 6) if orig_w > 0 else 0.0
+                    fr["relativeRight"] = round(orig_long_edges[1] / orig_w, 6) if orig_w > 0 else 1.0
+
     crop_angle = estimate_rotation(orig_arr, expected_frames, orig_w, orig_h, is_horizontal, chosen_mode)
 
     elapsed = time.time() - t0
