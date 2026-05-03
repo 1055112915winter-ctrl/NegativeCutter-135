@@ -5,3 +5,11 @@
 
 # dev symlink for batch tests (points to ../../../test_files in master root)
 /test_files
+
+# macOS / editor / temp
+.DS_Store
+
+# FilmCrop runtime artifacts
+*.log
+filmcrop_e2e.json
+compare_schemes.py
