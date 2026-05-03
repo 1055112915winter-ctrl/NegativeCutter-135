@@ -133,6 +133,45 @@ end tell
 '''
         self._osascript(script)
 
+    def select_photo_by_filename(self, basename):
+        """在图库模块中通过文件名过滤并选中照片。
+
+        步骤:
+          1. 切到 Library 模块的 Grid 视图(裸字母 ``g``)
+          2. ``Cmd+F`` 打开 Library Filter > Text 面板
+          3. 输入 basename(不带扩展名)使过滤器生效
+          4. 回车关闭过滤输入框,grid 仅显示匹配照片
+          5. ``Cmd+A`` 选中所有可见(即匹配)照片
+
+        失败模式(都会让流程在 silentApplyJson 过滤步打印诊断,见 B):
+          - 用户当前文件夹/集合不包含 basename → Cmd+A 选中 0 张或选错对象
+          - Library Filter Bar 被隐藏 → Cmd+F 打开它但可能慢一拍
+          - 已存在过滤条件 → 这次输入可能叠加而非替代
+
+        相比让用户手动选,此函数把"选对照片"自动化,减少 e2e_auto.py
+        每次跑都得提醒用户的踩点。
+        """
+        # 把 \ 和 " 等字符做最小转义,防止注入到 AppleScript 字符串里
+        safe = basename.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'''
+tell application "{self.app_name}"
+    activate
+    tell application "System Events"
+        keystroke "g"
+        delay 0.4
+        keystroke "f" using command down
+        delay 0.5
+        keystroke "{safe}"
+        delay 1.0
+        key code 36
+        delay 0.3
+        keystroke "a" using command down
+        delay 0.3
+    end tell
+end tell
+'''
+        self._osascript(script)
+
 
 # ------------------------------------------------------------------
 # Catalog 验证
@@ -367,15 +406,21 @@ def run_auto_test(catalog_path, wait_seconds=90, photo_name=None):
     cleanup_copy(tmp_before, tmpdir_before)
 
     # ---- 3. 激活 Lightroom ----
-    print(f"\n[3/7] 激活 Lightroom 并切换到修改照片模块...")
+    print(f"\n[3/7] 激活 Lightroom 并定位测试照片...")
     if applescript_ok:
         lr.activate()
         time.sleep(0.5)
+        # 通过文件名过滤 + Cmd+A 自动选中目标照片,避免依赖用户手选。
+        # silentApplyJson 会按 basename 严格比对,选错就直接被拒。
+        lr.select_photo_by_filename(test_basename)
+        time.sleep(0.5)
         lr.switch_to_develop()
         time.sleep(0.5)
+        print(f"  已尝试通过 Library Filter 选中 {test_basename} 并切到修改照片模块")
+        print(f"  (若仍失败,请检查 LR 当前文件夹/集合是否包含 {test_basename})")
     else:
         print("  AppleScript 不可用，跳过自动激活")
-        print("  请确保 Lightroom 在修改照片模块中")
+        print(f"  请确保 Lightroom 中已选中 {test_basename} 并在修改照片模块中")
 
     # ---- 4. 生成 JSON 文件 ----
     print(f"\n[4/7] 生成 FilmCrop JSON 文件...")

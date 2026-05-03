@@ -863,6 +863,7 @@ local function silentApplyJson(catalog, selectedPhotos, jsonPath)
   local photosToProcess = selectedPhotos
   if targetBasename and targetBasename ~= "" then
     local filtered = {}
+    local seenBasenames = {}  -- diagnostic: what was actually selected
     for _, photo in ipairs(selectedPhotos) do
       -- NOTE: photo:getFormattedMetadata is a yielding LR call. Wrapping it
       -- in pcall raises "Yielding is not allowed within a C or metamethod
@@ -870,6 +871,7 @@ local function silentApplyJson(catalog, selectedPhotos, jsonPath)
       -- yield-safe; let exceptions surface to the outer pcall in startAutoWatch.
       local fileName = photo:getFormattedMetadata('fileName') or ""
       local baseName = fileName:gsub("%..+$", "")
+      table.insert(seenBasenames, baseName ~= "" and baseName or "<empty>")
       if baseName == targetBasename then
         table.insert(filtered, photo)
       end
@@ -878,8 +880,11 @@ local function silentApplyJson(catalog, selectedPhotos, jsonPath)
       photosToProcess = filtered
       logger:trace("自动检测: 过滤后处理 " .. #filtered .. " 张照片 (目标: " .. targetBasename .. ")")
     else
-      logger:trace("自动检测: 未找到匹配目标照片 " .. targetBasename)
-      return false, "未找到匹配的目标照片: " .. targetBasename
+      local seenStr = table.concat(seenBasenames, ", ")
+      logger:trace("自动检测: 未找到匹配目标照片 " .. targetBasename ..
+        " (当前选中 " .. #selectedPhotos .. " 张: [" .. seenStr .. "])")
+      return false, "未找到匹配的目标照片: " .. targetBasename ..
+        " (当前选中: " .. seenStr .. ")"
     end
   end
 
