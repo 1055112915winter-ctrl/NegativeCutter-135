@@ -22,7 +22,7 @@ except ImportError:
 _request_count: int = 0
 _server_instance: Any = None
 
-app = FastAPI(title="FilmCrop API", version="2.0.0")
+app = FastAPI(title="FilmCrop API", version="2.2.0")
 
 if HAS_FASTAPI:
     app.add_middleware(
