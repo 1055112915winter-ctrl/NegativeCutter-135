@@ -105,10 +105,17 @@ class LightroomController:
         # LR Classic 切 Develop 模块的快捷键是单字母 D(无 modifier)。
         # Cmd+D 实际是 "取消选中" (Edit > Deselect),触发不到模块切换,
         # 导致 ApplierAgent 在 Library 模块里 applyDevelopSettings 直接拒绝。
+        #
+        # 防御性 Esc:如果上一步的 select_photo_by_filename 留下 Library Filter
+        # 输入框的焦点,这里裸字母 d 会被填进搜索框而不是切模块。先 Esc
+        # 释放任何文本焦点,再发 d。Esc 在 LR 里只关闭过滤输入/对话框,
+        # 不破坏 selection 或 filter 状态。
         script = f'''
 tell application "{self.app_name}"
     activate
     tell application "System Events"
+        key code 53
+        delay 0.2
         keystroke "d"
         delay 0.5
     end tell
@@ -140,8 +147,15 @@ end tell
           1. 切到 Library 模块的 Grid 视图(裸字母 ``g``)
           2. ``Cmd+F`` 打开 Library Filter > Text 面板
           3. 输入 basename(不带扩展名)使过滤器生效
-          4. 回车关闭过滤输入框,grid 仅显示匹配照片
+          4. **Esc 释放过滤输入框焦点**,grid 仅显示匹配照片
           5. ``Cmd+A`` 选中所有可见(即匹配)照片
+
+        关键踩点:必须用 Esc(key code 53)而不是 Return(key code 36)。
+        LR Library Filter 的 Text 输入框 Return 不释放焦点,后续 Cmd+A
+        会被解释为"全选输入框文本"而不是"选中 grid 全部照片",更糟的
+        是后续 switch_to_develop 的裸字母 d 会被填进搜索框而不是切模块,
+        导致 applyDevelopSettings 在 Library 模块下被拒。Esc 干净释放焦
+        点,filter 和 selection 状态不受影响。
 
         失败模式(都会让流程在 silentApplyJson 过滤步打印诊断,见 B):
           - 用户当前文件夹/集合不包含 basename → Cmd+A 选中 0 张或选错对象
@@ -163,7 +177,7 @@ tell application "{self.app_name}"
         delay 0.5
         keystroke "{safe}"
         delay 1.0
-        key code 36
+        key code 53
         delay 0.3
         keystroke "a" using command down
         delay 0.3
