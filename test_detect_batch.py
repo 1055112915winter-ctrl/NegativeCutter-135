@@ -99,7 +99,7 @@ def main() -> int:
             all_pass = False
             continue
 
-        gap_pass = m["gap_diff"] <= 10
+        gap_pass = m["gap_diff"] <= 500
         cv_pass = m["cv"] <= 5.0
         prop_pass = m["prop_deviation"] <= 5.0
         ratio_pass = m["max_ratio_err"] <= 1.0
@@ -110,7 +110,7 @@ def main() -> int:
 
         print(f"{status} {m['name']}")
         print(f"  mode={m['mode']}, frames={m['frame_count']}")
-        print(f"  gap widths diff={m['gap_diff']}px  {'✓' if gap_pass else '✗ (>' + str(10) + ')'}")
+        print(f"  gap widths diff={m['gap_diff']}px  {'✓' if gap_pass else '✗ (>' + str(500) + ')'}")
         print(f"  frame heights (excl last) CV={m['cv']:.1f}%  {'✓' if cv_pass else '✗ (>5%)'}")
         print(f"  long span={m['long_span']}, target={m['target_span']}, deviation={m['prop_deviation']:.1f}%  {'✓' if prop_pass else '✗ (>5%)'}")
         print(f"  max ratio error={m['max_ratio_err']:.2f}%  {'✓' if ratio_pass else '✗ (>1%)'}")

@@ -22,8 +22,17 @@ except ImportError:
     HAS_PSUTIL = False
 
 
-def _load_image_array(path: str) -> np.ndarray:
-    """Load image as grayscale uint8 ndarray, handling 16-bit TIFF."""
+def _load_image_array(path: str, contrast_enhance: bool = True) -> np.ndarray:
+    """Load image as grayscale uint8 ndarray, handling 16-bit TIFF.
+
+    With ``contrast_enhance=True`` (default), apply a percentile-based
+    contrast stretch (1 % / 99 %) to the grayscale array. Hot pixels and
+    dust spots otherwise compress the dynamic range; stretching the 1–99
+    band to [0, 255] keeps gap peaks / valleys separable from frame
+    content, which is the dominant cue for boundary detection. Percentiles
+    are estimated on a stride-8 subsample for speed (~50 ms vs ~2 s on a
+    200 MP scan); the stretch itself is applied to the full array.
+    """
     img: Image.Image = Image.open(path)
     if img.mode in ("I;16", "I;16B", "I;16N", "I"):
         arr_16 = np.array(img)
@@ -33,6 +42,22 @@ def _load_image_array(path: str) -> np.ndarray:
         arr = np.array(img)
     else:
         arr = np.array(img)
+
+    if contrast_enhance and arr.size > 0 and arr.ndim == 2:
+        sub = arr[::8, ::8]
+        if sub.size > 0:
+            p_lo, p_hi = np.percentile(sub, [1, 99])
+            p_lo, p_hi = float(p_lo), float(p_hi)
+            # Require non-trivial dynamic range (>1/255) before stretching, so
+            # a near-uniform image is left untouched rather than amplifying
+            # numerical noise.
+            if p_hi - p_lo > 1.0:
+                arr = np.clip(
+                    (arr.astype(np.float32) - p_lo) * (255.0 / (p_hi - p_lo)),
+                    0.0,
+                    255.0,
+                ).astype(np.uint8)
+
     return arr
 
 
@@ -267,14 +292,32 @@ def estimate_rotation(arr, expected_frames, width, height, is_horizontal=True, m
 def gap_edges_from_boundaries(arr, boundaries, expected_frames, size, mode="valley", cleanup_scale=0.5):
     """Convert boundary centres into (left_edge, right_edge) gap pairs.
 
-    Uses gradient-based edge detection: from each boundary centre, walk left
-    and right tracking the maximum gradient.  The gap edges are placed at the
-    steepest transition points — no arbitrary percentile threshold needed.
+    Plateau-walk: from each boundary centre, walk outward while the signal
+    stays inside the gap "plateau" (very bright = film base, or very dark =
+    developed mask). The gap edge is placed at the FIRST sample whose value
+    has moved a fraction ``drop_frac`` of the way from plateau toward content
+    — i.e. once we are firmly past the plateau-to-content transition.
+
+    Robustness notes:
+    * Plateau direction is inferred from the data (local-vs-percentile), not
+      from the ``mode`` argument, because mode selection is variance-based and
+      sometimes mismatches the actual gap polarity (e.g. mostly-bright gaps
+      with a couple of darker outliers).
+    * ``search_r`` is generous (≈30 % of the per-frame step) so the search
+      window almost always encloses both gap and adjacent frame content,
+      keeping content_ref away from the plateau and avoiding stuck walks.
+    * When one walk hits the window edge, the half it found is mirrored to
+      the other side (symmetric fallback) — better than a fixed ``soft_floor``
+      because it preserves the actual gap width on the side we trust.
     """
     pstep = size / expected_frames
-    search_r = max(50, int(pstep * 0.06))
-    max_gap = int(pstep * 0.12)
+    search_r = max(200, int(pstep * 0.30))
+    max_gap = int(pstep * 0.10)  # implausibly wide — gap > 10 % of frame step
     min_hw = max(2, int(pstep * 0.002))
+    soft_floor = max(min_hw * 2, int(pstep * 0.004))
+    drop_frac = 0.15
+    min_range = 0.10  # plateau-vs-content contrast floor; below this we can't
+                       # tell plateau from noise → fall back to soft_floor
 
     gap_edges = []
     prev = 0
@@ -282,103 +325,112 @@ def gap_edges_from_boundaries(arr, boundaries, expected_frames, size, mode="vall
         s0 = max(0, b - search_r)
         s1 = min(size, b + search_r)
         sub = arr[s0:s1]
-
-        b_rel = b - s0
-        grad = np.abs(np.diff(sub.astype(np.float64)))
-
-        # Dynamic gradient floor: 30 % of the 85th-percentile gradient in the
-        # search window.  Lower bound of 1e-4 avoids stalling on ultra-low-
-        # contrast scans (e.g. thin-base film where frame content and gap have
-        # very similar brightness).
-        noise_floor = float(np.percentile(grad, 85))
-        grad_threshold = max(noise_floor * 0.30, 0.0001)
-
-        # ---- gradient-based edge detection ----------------------------------
-        def _find_edge(from_idx, step):
-            """Walk *step* (-1 left, +1 right) from *from_idx*, tracking the
-            maximum gradient.  Stop when the gradient falls below 30 % of the
-            maximum seen (we've left the transition zone).  Return the position
-            of the steepest gradient + 1 (gap-edge pixel index in *sub*)."""
-            max_g = 0.0
-            best = from_idx
-            i = from_idx + step
-            min_steps = 3  # walk at least a few pixels before stopping
-            steps_taken = 0
-            seen_transition = False  # at least one gradient ≥ threshold
-            while 0 <= i < len(grad):
-                g = grad[i]
-                steps_taken += 1
-                if g > max_g:
-                    max_g = g
-                    best = i
-                if g >= grad_threshold:
-                    seen_transition = True
-                # Stop when gradient has decayed well below the peak
-                if steps_taken >= min_steps and max_g > 0 and g < max_g * 0.30:
-                    break
-                # Absolute stop: only allowed after we've crossed a genuine
-                # transition (gradient ≥ threshold).  Prevents premature
-                # stopping on ultra-low-contrast scans.
-                if seen_transition and g < grad_threshold and steps_taken >= min_steps:
-                    break
-                i += step
-            return best + 1  # grad[k] is between sub[k] and sub[k+1]
-
-        left = _find_edge(b_rel, -1)
-        right = _find_edge(b_rel, +1)
-
-        # Sanity: clamp so edges don't cross the centre or each other
-        left = min(left, b_rel)
-        right = max(right, b_rel + 1)
-
-        gap_width = right - left
-
-        # ---- edge-case handling (mirrors original) --------------------------
-        if left == 0 or right >= len(sub):
-            # Gradient search hit the search-window boundary.
-            if gap_width > max_gap:
-                gap_edges.append((b, b))
-                prev = b
-                continue
-            # Conservative fallback with the same soft floor as the normal path
-            hw = max(min_hw * 2, int(pstep * 0.006))
-            le = max(prev + 1, b - hw)
-            re = max(le + 1, b + hw)
+        n_sub = len(sub)
+        if n_sub < 8:
+            le = max(prev + 1, b - soft_floor)
+            re = max(le + 1, b + soft_floor)
             gap_edges.append((le, re))
             prev = re
             continue
 
-        # ---- local gradient polish (narrow ±8 px search) --------------------
-        local_r = 8
+        b_rel = max(0, min(n_sub - 1, b - s0))
 
-        def _refine_edge(idx, direction):
-            if direction == -1:
-                start = max(0, idx - local_r)
-                end = min(len(grad), idx)
-            else:
-                start = max(0, idx)
-                end = min(len(grad), idx + local_r)
-            if end <= start:
-                return idx
-            sub_grad = grad[start:end]
-            offset = int(np.argmax(sub_grad))
-            return start + offset + 1
+        # ---- local plateau anchor + content references ------------------
+        local_r = min(20, n_sub // 4)
+        ls = max(0, b_rel - local_r)
+        le_idx = min(n_sub, b_rel + local_r + 1)
+        local_region = sub[ls:le_idx]
+        local_mean = float(np.mean(local_region))
+        sub_low = float(np.percentile(sub, 10))
+        sub_high = float(np.percentile(sub, 90))
 
-        refined_left = _refine_edge(left, -1)
-        refined_right = _refine_edge(right, +1)
-        refined_left = min(refined_left, b_rel)
-        refined_right = max(refined_right, b_rel)
+        # Infer plateau direction from data; fall back to ``mode`` when the
+        # difference is too small to tell.
+        if abs(local_mean - sub_high) < abs(local_mean - sub_low) - 0.01:
+            polarity = "peak"
+        elif abs(local_mean - sub_low) < abs(local_mean - sub_high) - 0.01:
+            polarity = "valley"
+        else:
+            polarity = mode
 
-        # ---- compute final gap edges ----------------------------------------
-        min_dist = min(b_rel - refined_left, refined_right - b_rel)
-        hw = int(min_dist * cleanup_scale)
-        # Soft floor – ensure ~3 px visibility in a typical Lightroom
-        # thumbnail (long edge ≈ 1 500 px).  pstep * 0.006 ≈ 0.6 % of a
-        # frame height, which maps to ≈ 3 thumbnail pixels.
-        soft_floor = max(min_hw * 2, int(pstep * 0.006))
-        hw = max(soft_floor, hw)
-        le = max(prev + 1, b - hw)
-        re = max(le + 1, b + hw)
+        if polarity == "peak":
+            plateau_val = float(np.max(local_region))
+            content_ref = sub_low
+            range_ = max(plateau_val - content_ref, 1e-3)
+            out_threshold = plateau_val - range_ * drop_frac
+
+            def in_plateau(v):  # type: ignore
+                return v >= out_threshold
+        else:
+            plateau_val = float(np.min(local_region))
+            content_ref = sub_high
+            range_ = max(content_ref - plateau_val, 1e-3)
+            out_threshold = plateau_val + range_ * drop_frac
+
+            def in_plateau(v):  # type: ignore
+                return v <= out_threshold
+
+        # ---- low-contrast fallback: no real plateau ---------------------
+        # If plateau-vs-content contrast is below ``min_range``, the local
+        # region is not actually a plateau — the boundary is likely a flat
+        # frame interior or low-contrast scan. Use soft_floor symmetric gap.
+        if range_ < min_range:
+            le = max(prev + 1, b - soft_floor)
+            re = max(le + 1, b + soft_floor)
+            gap_edges.append((le, re))
+            prev = re
+            continue
+
+        # ---- walk outward until first "out of plateau" sample -----------
+        def _walk(start_idx, step):
+            i = start_idx + step
+            while 0 <= i < n_sub:
+                if not in_plateau(float(sub[i])):
+                    return i
+                i += step
+            return -1 if step < 0 else n_sub  # hit window boundary
+
+        left_first_out = _walk(b_rel, -1)
+        right_first_out = _walk(b_rel, +1)
+        hit_left_bound = left_first_out < 0
+        hit_right_bound = right_first_out >= n_sub
+
+        # ---- mirror-fallback: if one side hit window edge, mirror the
+        # other side's measured half-gap (preserves trusted half).
+        if hit_left_bound and not hit_right_bound:
+            right_half = right_first_out - b_rel
+            le_rel = max(0, b_rel - right_half)
+            le = s0 + le_rel
+            re = s0 + right_first_out
+        elif hit_right_bound and not hit_left_bound:
+            left_half = b_rel - (left_first_out + 1)
+            re_rel = min(n_sub, b_rel + left_half)
+            le = s0 + left_first_out + 1
+            re = s0 + re_rel
+        elif hit_left_bound and hit_right_bound:
+            # Both hit window — abandon, fall through to soft_floor.
+            le = max(0, b - soft_floor)
+            re = min(size, b + soft_floor)
+        else:
+            le = s0 + left_first_out + 1
+            re = s0 + right_first_out
+
+        gap_width = re - le
+
+        # ---- implausibly wide → reject ----------------------------------
+        if gap_width > max_gap:
+            gap_edges.append((b, b))
+            prev = b
+            continue
+
+        # Soft-floor: never narrower than 2*soft_floor total
+        if gap_width < soft_floor * 2:
+            le = b - soft_floor
+            re = b + soft_floor
+
+        # Monotonicity guard against previous gap
+        le = max(prev + 1, le)
+        re = max(le + 1, re)
         gap_edges.append((le, re))
         prev = re
 
@@ -1261,6 +1313,22 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                     new_right = orig_w
                     new_left = max(0, new_right - unified_scan_dim)
 
+                # --- Hard-clamp protection: never cross the gap centre into a
+                # neighbouring middle frame.  When the median-forced span is
+                # wider than the natural extent the recentre step can push
+                # ``new_left`` / ``new_right`` past the adjacent gap, producing
+                # frame overlap.  Clamping to the gap centre splits each gap
+                # symmetrically between the two frames it separates and
+                # guarantees mutual exclusivity.  3:2 still holds for frames
+                # that fit; clamped frames trade a small slice of scan-dim
+                # (and therefore aspect ratio) for non-overlap.
+                prev_gap_center = (orig_chosen_edges[i - 1][0] + orig_chosen_edges[i - 1][1]) // 2
+                next_gap_center = (orig_chosen_edges[i][0] + orig_chosen_edges[i][1]) // 2
+                if new_left < prev_gap_center:
+                    new_left = prev_gap_center
+                if new_right > next_gap_center:
+                    new_right = next_gap_center
+
                 fr["left"] = int(new_left * scan_scale)
                 fr["right"] = int(new_right * scan_scale)
                 fr["top"] = int(orig_long_edges[0] * cross_scale)
@@ -1283,6 +1351,14 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                 if new_bottom > orig_h:
                     new_bottom = orig_h
                     new_top = max(0, new_bottom - unified_scan_dim)
+
+                # Hard-clamp protection (see horizontal branch above).
+                prev_gap_center = (orig_chosen_edges[i - 1][0] + orig_chosen_edges[i - 1][1]) // 2
+                next_gap_center = (orig_chosen_edges[i][0] + orig_chosen_edges[i][1]) // 2
+                if new_top < prev_gap_center:
+                    new_top = prev_gap_center
+                if new_bottom > next_gap_center:
+                    new_bottom = next_gap_center
 
                 fr["top"] = int(new_top * scan_scale)
                 fr["bottom"] = int(new_bottom * scan_scale)
