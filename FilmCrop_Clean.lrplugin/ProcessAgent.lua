@@ -4,7 +4,6 @@
   被 DetectFrames.lua（带预览）和 BatchProcess.lua（无预览）共享。
 ]]
 
-local LrApplication = import 'LrApplication'
 local LrLogger = import 'LrLogger'
 local LrPathUtils = import 'LrPathUtils'
 local LrFileUtils = import 'LrFileUtils'

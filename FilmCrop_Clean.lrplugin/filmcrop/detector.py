@@ -15,11 +15,6 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None
 
-try:
-    import psutil
-    HAS_PSUTIL = True
-except ImportError:
-    HAS_PSUTIL = False
 
 
 def _load_image_array(path: str, contrast_enhance: bool = True) -> np.ndarray:
@@ -1378,7 +1373,6 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         ``frames[]``, ``cropAngle``, ``debug``.
     """
     t0 = time.time()
-    mem_before = psutil.Process().memory_info().rss / 1024 / 1024 if HAS_PSUTIL else 0
 
     arr = _load_image_array(image_path)
     thumb_h, thumb_w = arr.shape
@@ -1789,14 +1783,6 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     )
 
     elapsed = time.time() - t0
-    if HAS_PSUTIL:
-        mem_after = psutil.Process().memory_info().rss / 1024 / 1024
-        print(
-            f"[Perf] analyze_image: {elapsed:.2f}s, RAM +{mem_after - mem_before:.1f}MB (total {mem_after:.1f}MB)",
-            file=__import__("sys").stderr,
-        )
-    else:
-        print(f"[Perf] analyze_image: {elapsed:.2f}s", file=__import__("sys").stderr)
 
     debug_info = {
         "imageHeight": thumb_h,

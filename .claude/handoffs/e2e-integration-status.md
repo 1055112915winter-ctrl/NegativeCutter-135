@@ -471,3 +471,34 @@ v2.0.0 → **v2.2.0**（detect_thumb.py / __init__.py / api.py / Info.lua 统一
 | L1 单元 | `python3 test_detect_batch.py` | **PASS** (3/3) |
 | L4 真机 52191 | `e2e_auto.py --wait 30 --photo 52191` | **PASS** (6 VC, 对称边距) |
 | L4 真机 lucky | `e2e_auto.py --wait 30 --photo luckyc20013` | **PASS** (6 VC, 原始边距) |
+
+---
+
+## 15. Worktree 收尾与 master 后续演进（2026-05-05）
+
+### 15.1 Worktree 清理
+
+- **分支 `claude/hungry-hypatia-f45ddd` 已删除**（`ea4a33c` 的改动已通过 `94ecddb` + `69348d4` 合并到 master）
+- **残留 worktree 目录 `.claude/worktrees/hungry-hypatia-f45ddd` 已移除**
+- **其他废弃 worktree**（`quizzical-jackson-a651f4` 及 `ratio-scheme-a/b/c`）已在早前清理
+
+### 15.2 Master 后续提交（直接在 master 上完成）
+
+| Commit | 说明 |
+|--------|------|
+| `05ae6a9` | Revert aggressive tighten（0.3x 边际导致缝隙变大，用户要求回滚） |
+| `a9dd865` | 版本号统一 bump 至 v2.2.0 |
+| `f2bab48` | gitignore 增加 `.DS_Store`、`*.log`、`filmcrop_e2e.json`、`compare_schemes.py` |
+| `70d7724` | detector 改进：confidence-based mirroring + zero-margin tighten + gap plateau refinement |
+| `1e8f2e8` | **UI 精简**：Info.lua 菜单从 10 个缩减至 2 个（检测胶片帧 + 批量处理）；DetectFrames.lua 跳过 PreviewDialog，检测后直接创建虚拟副本 |
+| *(当前)* | 快捷键：`Alt+M`（单次检测）、`Alt+Shift+M`（批量处理） |
+
+### 15.3 已知待处理
+
+- ** aggressive tighten 回滚后仍有微缝**：用户反馈"还露出那么一点点缝"，已 revert，更精细的 tighten 策略需更多样本评估
+- ** detector 零边距 tighten 与 confidence-based mirroring**（`70d7724`）：L4 尚未重测，待用户验证
+- ** ProcessAgent.parseJSON stderr 污染修复**：`[Perf]` 日志经 stderr 混入 stdout 导致 json.decode 失败，已在 `ProcessAgent.lua` 增加前缀剥离 + `detector.py` 移除 `[Perf]` 输出
+
+---
+
+> **状态**: hungry-hypatia worktree 完全合并并清理。当前 master 领先 origin 31 个提交。待 push。

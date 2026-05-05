@@ -126,43 +126,6 @@ end
   返回:
     success: boolean
 ]]--
-function ApplierAgent.applyFirstFrame(photo, frames)
-  if not photo then
-    return false, "photo参数为空"
-  end
-
-  if not frames or #frames == 0 then
-    return false, "没有帧数据"
-  end
-
-  local firstFrame = frames[1]
-  logger:trace("应用第一帧裁剪: " .. firstFrame.index)
-
-  return ApplierAgent.applyCrop(photo, {
-    top = firstFrame.relativeTop,
-    bottom = firstFrame.relativeBottom,
-    left = firstFrame.relativeLeft or 0,
-    right = firstFrame.relativeRight or 1
-  })
-end
-
---[[
-  获取照片当前的裁剪设置
-]]--
-function ApplierAgent.getCurrentCrop(photo)
-  if not photo then
-    return nil, "photo参数为空"
-  end
-
-  local settings = photo:getDevelopSettings()
-  return {
-    top = settings.CropTop or 0,
-    bottom = settings.CropBottom or 1,
-    left = settings.CropLeft or 0,
-    right = settings.CropRight or 1,
-    angle = settings.CropAngle or 0
-  }
-end
 
 --[[
   重置裁剪及透视变换（全图显示，清除所有手动旋转/倾斜/透视校正）
