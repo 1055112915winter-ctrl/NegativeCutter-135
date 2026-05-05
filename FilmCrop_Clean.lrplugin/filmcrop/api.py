@@ -38,6 +38,27 @@ class AnalyzeRequest(BaseModel):
     expected_frames: int = 6
     cleanup_scale: float = 0.5
     original_path: Optional[str] = None
+    aspect_ratio: Optional[float] = None
+    format_hint: Optional[str] = None
+
+
+_FORMAT_RATIOS = {"35mm": 3 / 2, "6x6": 1.0, "6x7": 7 / 6, "6x9": 3 / 2, "4x5": 5 / 4}
+
+
+def _resolve_aspect_ratio(req: "AnalyzeRequest") -> Optional[float]:
+    """Explicit aspect_ratio wins over format_hint. format_hint='auto' falls
+    through to detector auto-detection (None). Default is 3/2 to keep legacy
+    callers (no fields set) byte-for-byte identical."""
+    if req.aspect_ratio is not None:
+        return float(req.aspect_ratio)
+    hint = (req.format_hint or "").strip().lower()
+    if not hint:
+        return 3 / 2
+    if hint == "auto":
+        return None
+    if hint in _FORMAT_RATIOS:
+        return _FORMAT_RATIOS[hint]
+    return 3 / 2
 
 
 class CropRequest(BaseModel):
@@ -72,6 +93,7 @@ def analyze(req: AnalyzeRequest):
             expected_frames=req.expected_frames,
             cleanup_scale=req.cleanup_scale,
             original_path=req.original_path,
+            aspect_ratio=_resolve_aspect_ratio(req),
         )
         return result
     except Exception as e:

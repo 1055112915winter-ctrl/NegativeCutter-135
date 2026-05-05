@@ -723,6 +723,313 @@ def _refine_long_edges(
     return int(near), int(far)
 
 
+_LONG_EDGE_CONF_LOW = 0.25
+_LONG_EDGE_CONF_HIGH = 0.55
+
+
+def _long_edge_confidence(arr, is_horizontal, long_edges, cross_size, sample_count=12):
+    """Score how cleanly each long edge separates film from film-base.
+
+    Returns (near_conf, far_conf, near_diag, far_diag) where each conf is in
+    [0, 1]. Combines two cues:
+      - Gradient strength: max |diff| around the edge in the global cross-axis
+        projection, normalised against 20% of the projection's P5..P95 range.
+      - Along-axis consistency: at `sample_count` evenly spaced positions along
+        the scan axis, locate the strongest local gradient near the edge; a
+        small std of those positions means the edge is straight and stable.
+    Score = 0.6 * gradient_strength + 0.4 * consistency.
+    """
+    near, far = long_edges
+    radius = max(8, int(cross_size * 0.005))
+
+    if is_horizontal:
+        proj = arr.mean(axis=1).astype(np.float32)
+        scan_size = arr.shape[1]
+    else:
+        proj = arr.mean(axis=0).astype(np.float32)
+        scan_size = arr.shape[1] if not is_horizontal else arr.shape[0]
+        # arr.shape == (h, w); when is_horizontal=False the cross axis is x,
+        # so projection is per-column (axis=0) and scan size is height.
+        scan_size = arr.shape[0]
+
+    proj_range = float(np.percentile(proj, 95) - np.percentile(proj, 5))
+    grad_norm = max(proj_range * 0.2, 1e-6)
+
+    def _grad_strength(center: int) -> float:
+        lo = max(0, center - radius)
+        hi = min(len(proj), center + radius + 1)
+        if hi - lo < 3:
+            return 0.0
+        local = proj[lo:hi]
+        return float(np.clip(np.max(np.abs(np.diff(local))) / grad_norm, 0.0, 1.0))
+
+    def _consistency(center: int) -> tuple:
+        if center <= 0 or center >= cross_size - 1 or scan_size < sample_count * 4:
+            return 0.0, []
+        big_lo = max(0, center - 4 * radius)
+        big_hi = min(cross_size, center + 4 * radius + 1)
+        if big_hi - big_lo < 5:
+            return 0.0, []
+        sample_positions = np.linspace(
+            scan_size * 0.1, scan_size * 0.9, sample_count
+        ).astype(int)
+        sample_positions = np.clip(sample_positions, 0, scan_size - 1)
+        positions: list = []
+        for s in sample_positions:
+            if is_horizontal:
+                strip = arr[big_lo:big_hi, max(0, s - 4):min(arr.shape[1], s + 5)]
+                if strip.size == 0:
+                    continue
+                col = strip.mean(axis=1).astype(np.float32)
+            else:
+                strip = arr[max(0, s - 4):min(arr.shape[0], s + 5), big_lo:big_hi]
+                if strip.size == 0:
+                    continue
+                col = strip.mean(axis=0).astype(np.float32)
+            if len(col) < 3:
+                continue
+            grad = np.abs(np.diff(col))
+            local_peak = big_lo + int(np.argmax(grad))
+            positions.append(local_peak)
+        if len(positions) < sample_count // 2:
+            return 0.0, positions
+        std = float(np.std(positions))
+        return float(np.clip(1.0 - std / (4 * radius), 0.0, 1.0)), positions
+
+    near_grad = _grad_strength(near)
+    far_grad = _grad_strength(far)
+    near_cons, near_pos = _consistency(near)
+    far_cons, far_pos = _consistency(far)
+
+    near_conf = 0.6 * near_grad + 0.4 * near_cons
+    far_conf = 0.6 * far_grad + 0.4 * far_cons
+    near_diag = {"grad": round(near_grad, 3), "cons": round(near_cons, 3)}
+    far_diag = {"grad": round(far_grad, 3), "cons": round(far_cons, 3)}
+    return float(near_conf), float(far_conf), near_diag, far_diag
+
+
+_ZERO_MARGIN_THRESHOLD = 5
+_ZERO_MARGIN_WALK_FRAC = 0.04
+_ZERO_MARGIN_HYSTERESIS = 3
+_ZERO_MARGIN_BASE_SAMPLE = 4
+_ZERO_MARGIN_SIGMA = 3.0
+
+# Gap-edge plateau refinement: walk each gap edge outward until the
+# transition gradient drops to a small fraction of its local peak.
+# The initial plateau-walk (drop_frac=0.15) places edges early in the
+# transition, leaving most of the gradient zone inside frames.
+_GAP_REFINE_HYSTERESIS = 3
+_GAP_REFINE_WALK_MAX = 60          # px — search window around each edge
+_GAP_REFINE_GRAD_FRAC = 0.15       # threshold = peak_grad * 0.15
+_GAP_REFINE_MIN_PEAK = 0.002       # absolute gradient floor — skip flat edges
+_GAP_REFINE_MAX_SHIFT = 50         # hard cap on how far an edge may move
+
+
+def _tighten_zero_margin(arr, is_horizontal, long_edges, cross_size):
+    """Walk inward from a near-zero film-base margin until image content begins.
+
+    Triple safety: 3σ deviation gate, 3-line hysteresis, and a hard 4% walk
+    cap. Only acts on sides where the current margin is ≤5px. Returns the
+    (possibly tightened) (near, far) tuple.
+    """
+    near, far = long_edges
+    walk_max = max(8, int(cross_size * _ZERO_MARGIN_WALK_FRAC))
+    sample = _ZERO_MARGIN_BASE_SAMPLE
+
+    def _line_mean(idx: int) -> float:
+        if is_horizontal:
+            if idx < 0 or idx >= arr.shape[0]:
+                return 0.0
+            return float(arr[idx, :].mean())
+        else:
+            if idx < 0 or idx >= arr.shape[1]:
+                return 0.0
+            return float(arr[:, idx].mean())
+
+    def _walk(start: int, direction: int) -> int:
+        # Sample film-base from the outermost rows/columns on this side.
+        if direction == 1:
+            base_indices = [max(0, start + i) for i in range(sample)]
+        else:
+            base_indices = [max(0, start - i) for i in range(sample)]
+        base_means = np.array([_line_mean(i) for i in base_indices], dtype=np.float32)
+        base_mean = float(base_means.mean())
+        base_std = float(base_means.std())
+        threshold = max(_ZERO_MARGIN_SIGMA * base_std, 1.5)
+        out_streak = 0
+        last_in = start
+        for step in range(sample, walk_max):
+            idx = start + step * direction
+            if idx < 0 or idx >= cross_size:
+                break
+            m = _line_mean(idx)
+            if abs(m - base_mean) > threshold:
+                out_streak += 1
+                if out_streak >= _ZERO_MARGIN_HYSTERESIS:
+                    # Step back to the first out-of-distribution line.
+                    return idx - (out_streak - 1) * direction
+            else:
+                out_streak = 0
+                last_in = idx
+        return last_in
+
+    new_near, new_far = near, far
+    if near <= _ZERO_MARGIN_THRESHOLD:
+        new_near = max(near, _walk(near, 1))
+    if (cross_size - far) <= _ZERO_MARGIN_THRESHOLD:
+        new_far = min(far, _walk(far, -1))
+
+    if new_near >= new_far:
+        return long_edges
+    return int(new_near), int(new_far)
+
+
+def _refine_gap_edges_to_plateau(arr, is_horizontal, gap_edges, long_edges,
+                                  cross_size, mode):
+    """Refine gap edges by absorbing the transition zone into the gap.
+
+    The initial plateau-walk (``drop_frac = 0.15``) places edges early in
+    the gap-to-frame transition.  This leaves most of the gradient zone
+    inside adjacent frames, causing visible bleed.  Here we look at the
+    *gradient* of the scan projection: the transition zone has a sharp
+    gradient peak, while frame content is comparatively flat.  We walk
+    each edge outward past the local gradient peak until the gradient
+    drops to a small fraction (``_GAP_REFINE_GRAD_FRAC``) of that peak
+    for ``_GAP_REFINE_HYSTERESIS`` consecutive rows.
+
+    Parameters
+    ----------
+    arr : ndarray
+        Original-resolution grayscale image (uint8).
+    is_horizontal : bool
+        Film strips run horizontally (scan axis = x).
+    gap_edges : list[(le, re)]
+        Current gap edges in scan-axis coordinates.
+    long_edges : (near, far)
+        Cross-axis bounds.
+    cross_size : int
+        Size of the cross axis (height if horizontal, width if not).
+    mode : {"peak", "valley"}
+        Gap polarity (ignored — gradient is sign-agnostic).
+
+    Returns
+    -------
+    list[(le, re)]
+        Refined gap edges (may be identical to input if no walk was needed).
+    """
+    if not gap_edges or cross_size <= 0:
+        return gap_edges
+
+    near, far = long_edges
+    if near >= far:
+        near, far = 0, cross_size
+
+    # Compute scan projection limited to the long-edge band.
+    if is_horizontal:
+        scan_projection = np.mean(arr[near:far, :], axis=0) / 255.0
+    else:
+        scan_projection = np.mean(arr[:, near:far], axis=1) / 255.0
+
+    n = len(scan_projection)
+
+    # First derivative (central differences) + light smoothing.
+    grad = np.zeros_like(scan_projection)
+    grad[1:-1] = np.abs(scan_projection[2:] - scan_projection[:-2]) / 2.0
+    grad[0] = abs(scan_projection[1] - scan_projection[0])
+    grad[-1] = abs(scan_projection[-1] - scan_projection[-2])
+    smooth_k = np.ones(5) / 5.0
+    grad = np.convolve(grad, smooth_k, mode="same")
+
+    walk_max = _GAP_REFINE_WALK_MAX
+    shift_cap = _GAP_REFINE_MAX_SHIFT
+    hysteresis = _GAP_REFINE_HYSTERESIS
+    grad_frac = _GAP_REFINE_GRAD_FRAC
+    min_peak = _GAP_REFINE_MIN_PEAK
+
+    refined = []
+    for i, (le, re) in enumerate(gap_edges):
+        if re <= le:
+            refined.append((le, re))
+            continue
+
+        new_le, new_re = le, re
+
+        # ---- left edge: search [le - walk_max, le] ---------------------
+        left_win_start = max(0, le - walk_max)
+        left_grad_win = grad[left_win_start:le]
+        if len(left_grad_win) > 0:
+            peak_rel = int(np.argmax(left_grad_win))
+            peak_idx = left_win_start + peak_rel
+            peak_val = float(left_grad_win[peak_rel])
+            if peak_val >= min_peak:
+                threshold = peak_val * grad_frac
+                streak = 0
+                for idx in range(peak_idx - 1, max(-1, peak_idx - 1 - walk_max), -1):
+                    if grad[idx] <= threshold:
+                        streak += 1
+                        if streak >= hysteresis:
+                            candidate = idx + streak - 1
+                            if le - candidate <= shift_cap:
+                                new_le = candidate
+                            break
+                    else:
+                        streak = 0
+
+        # ---- right edge: search [re, re + walk_max] --------------------
+        right_win_end = min(n, re + walk_max)
+        right_grad_win = grad[re:right_win_end]
+        if len(right_grad_win) > 0:
+            peak_rel = int(np.argmax(right_grad_win))
+            peak_idx = re + peak_rel
+            peak_val = float(right_grad_win[peak_rel])
+            if peak_val >= min_peak:
+                threshold = peak_val * grad_frac
+                streak = 0
+                for idx in range(peak_idx + 1, min(n, peak_idx + 1 + walk_max)):
+                    if grad[idx] <= threshold:
+                        streak += 1
+                        if streak >= hysteresis:
+                            candidate = idx - streak + 1
+                            if candidate - re <= shift_cap:
+                                new_re = candidate
+                            break
+                    else:
+                        streak = 0
+
+        # Prevent edges from crossing adjacent frames.
+        if i > 0:
+            prev_re = refined[-1][1]
+            new_le = max(new_le, prev_re + 1)
+        new_re = max(new_re, new_le + 1)
+
+        refined.append((int(new_le), int(new_re)))
+
+    return refined
+
+
+_FRAME_CONFIDENCE_REVIEW_THRESHOLD = 0.55
+
+
+def _frame_confidence(frame, aspect_ratio, is_horizontal, gap_shape_score, near_conf, far_conf):
+    """Combine three independent quality signals into a single 0-1 score.
+
+    Components (weighted sum):
+      aspect_residual (0.5) — frame ratio vs. requested aspect_ratio
+      gap_shape       (0.25) — chosen-mode gap-shape validation score
+      edge_strength   (0.25) — average long-edge gradient confidence
+    """
+    fw = frame["right"] - frame["left"]
+    fh = frame["bottom"] - frame["top"]
+    if fw <= 0 or fh <= 0:
+        return 0.0
+    actual = (fw / fh) if is_horizontal else (fh / fw)
+    rel_err = abs(actual - aspect_ratio) / aspect_ratio if aspect_ratio > 0 else 1.0
+    aspect_score = max(0.0, 1.0 - rel_err / 0.5)  # 0 at 50% off, 1 at perfect
+    gap_norm = max(0.0, min(1.0, (gap_shape_score + 0.05) / 0.30))
+    edge_score = max(0.0, min(1.0, (near_conf + far_conf) / 2.0))
+    return 0.5 * aspect_score + 0.25 * gap_norm + 0.25 * edge_score
+
+
 def _detect_scan_edge(proj, mode="peak", expected_frames=6, from_end=False):
     """Detect scan-edge / sprocket-area before first or after last frame.
 
@@ -969,6 +1276,49 @@ def _compute_frame_width_cv(edges, scan_size):
     return std_w / mean_w if mean_w > 0 else float("inf")
 
 
+_KNOWN_FORMAT_RATIOS = (1.0, 7 / 6, 5 / 4, 3 / 2)
+_AUTO_ASPECT_SNAP_TOLERANCE = 0.08
+
+
+def _auto_aspect_ratio(chosen_edges, long_edges, scan_size, cross_size):
+    """Estimate the long/short aspect ratio from detected frames.
+
+    Returns (resolved_ratio, raw_ratio). resolved_ratio snaps to the nearest
+    known format (1.0, 7/6, 5/4, 3/2) when within 8% relative deviation;
+    otherwise equals raw_ratio. Falls back to (3/2, None) when geometry is
+    degenerate.
+    """
+    if not chosen_edges or long_edges is None:
+        return 3 / 2, None
+    cross_span = long_edges[1] - long_edges[0]
+    if cross_span <= 0 or cross_size <= 0:
+        return 3 / 2, None
+
+    boundaries = [0]
+    for le, re in chosen_edges:
+        boundaries.append(le)
+        boundaries.append(re)
+    boundaries.append(scan_size)
+    frame_widths = [
+        boundaries[i + 1] - boundaries[i]
+        for i in range(0, len(boundaries) - 1, 2)
+    ]
+    frame_widths = [w for w in frame_widths if w > 0]
+    if len(frame_widths) < 2:
+        return 3 / 2, None
+    if len(frame_widths) >= 4:
+        frame_widths = frame_widths[1:-1]
+    median_scan = float(np.median(frame_widths))
+    if median_scan <= 0:
+        return 3 / 2, None
+
+    raw_ratio = median_scan / cross_span
+    best = min(_KNOWN_FORMAT_RATIOS, key=lambda r: abs(raw_ratio - r) / r)
+    if abs(raw_ratio - best) / best <= _AUTO_ASPECT_SNAP_TOLERANCE:
+        return best, raw_ratio
+    return raw_ratio, raw_ratio
+
+
 def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
     """Auto-detect best frame count (2..max_frames)."""
     best_frames = 6
@@ -1001,7 +1351,7 @@ def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
     return best_frames, best_result
 
 
-def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: float = 0.5, original_path: Optional[str] = None, aspect_ratio: float = 3 / 2) -> dict:
+def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: float = 0.5, original_path: Optional[str] = None, aspect_ratio: Optional[float] = 3 / 2) -> dict:
     """
     Analyse a scanned film strip and detect frame boundaries.
 
@@ -1107,9 +1457,16 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         opposite_mode = "peak" if chosen_mode == "valley" else "valley"
         orig_long_edges = detect_long_edges(orig_arr, is_horizontal, opposite_mode)
 
+    # Auto-detect aspect ratio when caller did not specify one
+    auto_aspect_raw: Optional[float] = None
+    if aspect_ratio is None:
+        aspect_ratio, auto_aspect_raw = _auto_aspect_ratio(
+            orig_chosen_edges, orig_long_edges, orig_scan_size, orig_cross_size
+        )
+
     # Aspect-ratio constrained refinement on original image
     orig_proportional = _detect_long_edges_proportional(
-        orig_arr, is_horizontal, orig_chosen_edges, aspect_ratio=3 / 2
+        orig_arr, is_horizontal, orig_chosen_edges, aspect_ratio=aspect_ratio
     )
     if orig_proportional:
         prop_near, prop_far = orig_proportional
@@ -1140,22 +1497,50 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     orig_prev_long_edges = orig_long_edges
     refined = _refine_long_edges(
         orig_arr, is_horizontal, orig_chosen_edges, orig_prev_long_edges,
-        aspect_ratio=3 / 2, search_margin=50,
+        aspect_ratio=aspect_ratio, search_margin=50,
     )
     orig_long_edges = refined if refined else orig_prev_long_edges
 
-    # Symmetry fallback: if one long-edge margin is clearly detected but the
-    # other is almost zero, mirror the larger margin to both sides.
-    # This handles cases where the film edge on one side (often the right)
-    # has low contrast and the detector misses it, leaving a visible
-    # unexposed film-base strip in the crop.
+    # Confidence-gated symmetry mirror: trust the high-confidence side and
+    # mirror its margin only when the opposite side is clearly missed.
+    # Both-high or both-low (or both-medium) leaves the asymmetric crop intact,
+    # which preserves legal off-centre framings instead of clobbering them.
+    near_long_conf, far_long_conf, near_long_diag, far_long_diag = (
+        _long_edge_confidence(orig_arr, is_horizontal, orig_long_edges, orig_cross_size)
+    )
     if orig_long_edges != (0, orig_cross_size):
         left_margin = orig_long_edges[0]
         right_margin = orig_cross_size - orig_long_edges[1]
         margin_diff = abs(left_margin - right_margin)
-        if margin_diff > max(10, int(orig_cross_size * 0.02)) and max(left_margin, right_margin) > 5:
-            max_margin = max(left_margin, right_margin)
-            orig_long_edges = (max_margin, orig_cross_size - max_margin)
+        asymmetric = (
+            margin_diff > max(10, int(orig_cross_size * 0.02))
+            and max(left_margin, right_margin) > 5
+        )
+        if asymmetric:
+            if near_long_conf >= _LONG_EDGE_CONF_HIGH and far_long_conf < _LONG_EDGE_CONF_LOW:
+                orig_long_edges = (left_margin, orig_cross_size - left_margin)
+            elif far_long_conf >= _LONG_EDGE_CONF_HIGH and near_long_conf < _LONG_EDGE_CONF_LOW:
+                orig_long_edges = (right_margin, orig_cross_size - right_margin)
+            # Both-high / both-low / mixed: keep the asymmetric edges as-is.
+
+    # Zero-margin tightening: when the film runs flush to one side of the
+    # scan, the long-edge detector returns the bare image edge, leaving 1-2px
+    # of black film border in the crop. Walk inward content-aware until we
+    # cross a 3σ deviation streak.
+    if (orig_long_edges[0] <= _ZERO_MARGIN_THRESHOLD or
+            orig_cross_size - orig_long_edges[1] <= _ZERO_MARGIN_THRESHOLD):
+        orig_long_edges = _tighten_zero_margin(
+            orig_arr, is_horizontal, orig_long_edges, orig_cross_size
+        )
+
+    # Plateau-refinement: the initial plateau-walk places gap edges at 15 %
+    # of the transition from plateau toward content.  This leaves most of the
+    # gradient zone inside adjacent frames, causing visible bleed.  Walk each
+    # edge outward until the signal stabilises at frame-content level.
+    orig_chosen_edges = _refine_gap_edges_to_plateau(
+        orig_arr, is_horizontal, orig_chosen_edges,
+        orig_long_edges, orig_cross_size, chosen_mode
+    )
 
     # Scan-edge detection on original image projection (use unsmoothed for sharper edges)
     first_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=False)
@@ -1388,6 +1773,21 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
 
     crop_angle = estimate_rotation(orig_arr, expected_frames, orig_w, orig_h, is_horizontal, chosen_mode)
 
+    # Per-frame confidence + global needsReview flag
+    chosen_gap_shape = peak_shape if chosen_mode == "peak" else valley_shape
+    for fr in frames:
+        fr["confidence"] = round(
+            _frame_confidence(
+                fr, float(aspect_ratio), is_horizontal,
+                chosen_gap_shape, near_long_conf, far_long_conf,
+            ),
+            3,
+        )
+    needs_review = any(
+        fr.get("confidence", 0.0) < _FRAME_CONFIDENCE_REVIEW_THRESHOLD
+        for fr in frames
+    )
+
     elapsed = time.time() - t0
     if HAS_PSUTIL:
         mem_after = psutil.Process().memory_info().rss / 1024 / 1024
@@ -1412,6 +1812,15 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     }
     if auto_detected:
         debug_info["autoDetectedFrames"] = expected_frames
+    debug_info["aspectRatio"] = round(float(aspect_ratio), 4)
+    if auto_aspect_raw is not None:
+        debug_info["autoAspectRaw"] = round(float(auto_aspect_raw), 4)
+    debug_info["longEdgeConfidence"] = {
+        "near": round(near_long_conf, 3),
+        "far": round(far_long_conf, 3),
+        "near_diag": near_long_diag,
+        "far_diag": far_long_diag,
+    }
 
     return {
         "frameCount": len(frames),
@@ -1419,6 +1828,7 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         "sourceHeight": thumb_h,
         "frames": frames,
         "cropAngle": round(crop_angle, 2),
+        "needsReview": needs_review,
         "debug": debug_info,
     }
 
