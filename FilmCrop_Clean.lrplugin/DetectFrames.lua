@@ -4,7 +4,7 @@
   工作流程:
   1. 获取缩略图
   2. 调用Python脚本分析帧边界
-  3. 显示预览对话框（用户确认/调整）
+  3. 方向对齐
   4. 为每帧创建虚拟副本并应用裁剪
 ]]--
 
@@ -19,7 +19,6 @@ local LrView = import 'LrView'
 local pluginPath = _PLUGIN.path
 
 local ProcessAgent = dofile(LrPathUtils.child(pluginPath, "ProcessAgent.lua"))
-local PreviewDialog = dofile(LrPathUtils.child(pluginPath, "PreviewDialog.lua"))
 
 local logger = LrLogger('FilmCrop')
 logger:enable("logfile")
@@ -31,7 +30,7 @@ if not prefs.expectedFrames then
 end
 
 --[[
-  处理单张照片（带预览确认）
+  处理单张照片（自动创建虚拟副本）
 ]]--
 local function processPhotoWithPreview(catalog, photo, i, total, errorMessages, expectedFrames)
   errorMessages = errorMessages or {}
@@ -69,16 +68,8 @@ local function processPhotoWithPreview(catalog, photo, i, total, errorMessages, 
   -- 步骤3: 方向对齐
   result = ProcessAgent.directionAlign(result, photo)
 
-  -- 步骤4: 预览对话框
-  logger:trace("显示预览对话框...")
-  local confirmed, adjustedFrames = PreviewDialog.show(thumbPath, result.frames, fileName)
-
-  if not confirmed then
-    logger:trace("用户取消预览，跳过")
-    return 0
-  end
-
-  local frames = adjustedFrames or result.frames
+  -- 步骤4: 跳过预览，直接使用检测结果
+  local frames = result.frames
 
   -- 补充缺省坐标
   for _, frame in ipairs(frames) do

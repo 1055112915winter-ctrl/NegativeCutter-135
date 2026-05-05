@@ -65,6 +65,11 @@ function ProcessAgent.parseJSON(jsonStr)
   }
   if type(jsonStr) ~= "string" or jsonStr == "" then return emptyResult end
 
+  -- Strip leading non-JSON noise (e.g. Python [Perf] logs or warnings on stderr)
+  local firstBrace = string.find(jsonStr, "{")
+  if not firstBrace then return emptyResult end
+  jsonStr = string.sub(jsonStr, firstBrace)
+
   local ok, raw = pcall(function() return json.decode(jsonStr) end)
   if not ok or type(raw) ~= "table" then return emptyResult end
 

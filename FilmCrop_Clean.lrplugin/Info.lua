@@ -19,42 +19,12 @@ return {
     {
       title = LOC "$$$/FilmCrop/Menu/DetectFrames=检测胶片帧",
       file = "DetectFrames.lua",
+      shortcut = "Alt+M",
     },
     {
       title = LOC "$$$/FilmCrop/Menu/BatchProcess=批量处理",
       file = "BatchProcess.lua",
-    },
-    {
-      title = "导入 FilmCrop XMP...",
-      file = "ImportXMP.lua",
-    },
-    {
-      title = "通过 FilmCrop 引擎检测...",
-      file = "ImportHTTP.lua",
-    },
-    {
-      title = "监视 FilmCrop JSON...",
-      file = "ImportWatch.lua",
-    },
-    {
-      title = "停止监视 FilmCrop JSON",
-      file = "StopWatch.lua",
-    },
-    {
-      title = "启动自动检测 (E2E)",
-      file = "AutoWatch.lua",
-    },
-    {
-      title = "停止自动检测 (E2E)",
-      file = "StopAutoWatch.lua",
-    },
-    {
-      title = LOC "$$$/FilmCrop/Menu/Settings=设置...",
-      file = "Settings.lua",
-    },
-    {
-      title = "测试 Python 环境",
-      file = "TestPython.lua",
+      shortcut = "Alt+Shift+M",
     },
   },
 
@@ -62,34 +32,12 @@ return {
     {
       title = LOC "$$$/FilmCrop/Menu/DetectFrames=检测胶片帧",
       file = "DetectFrames.lua",
+      shortcut = "Alt+M",
     },
     {
       title = LOC "$$$/FilmCrop/Menu/BatchProcess=批量处理",
       file = "BatchProcess.lua",
-    },
-    {
-      title = "导入 FilmCrop XMP...",
-      file = "ImportXMP.lua",
-    },
-    {
-      title = "通过 FilmCrop 引擎检测...",
-      file = "ImportHTTP.lua",
-    },
-    {
-      title = "监视 FilmCrop JSON...",
-      file = "ImportWatch.lua",
-    },
-    {
-      title = "停止监视 FilmCrop JSON",
-      file = "StopWatch.lua",
-    },
-    {
-      title = "启动自动检测 (E2E)",
-      file = "AutoWatch.lua",
-    },
-    {
-      title = "停止自动检测 (E2E)",
-      file = "StopAutoWatch.lua",
+      shortcut = "Alt+Shift+M",
     },
   },
 
