@@ -444,19 +444,6 @@ local function detectViaHttp()
     return
   end
 
-  local LrApplicationView = import 'LrApplicationView'
-  local catalog = LrApplication.activeCatalog()
-  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
-  local currentModule = LrApplicationView.getCurrentModuleName()
-  if currentModule ~= "develop" and not hasAdjust then
-    LrDialogs.message(
-      "FilmCrop - 请在修改照片模块中运行",
-      "由于 Lightroom SDK 限制，applyDevelopSettings 在图库模块中对虚拟副本无法生效。\n\n请升级到 Lightroom Classic 10.0+，或在「修改照片」模块中运行。",
-      "warning"
-    )
-    return
-  end
-
   local f = LrView.osFactory()
   local bind = LrView.bind
   local dialogData = {
@@ -629,19 +616,6 @@ local function watchJsonFile()
 
   if not selectedPhotos or #selectedPhotos == 0 then
     LrDialogs.message("FilmCrop - JSON 监视", "请先选择要关联的原始图像", "info")
-    return
-  end
-
-  local LrApplicationView = import 'LrApplicationView'
-  local catalog = LrApplication.activeCatalog()
-  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
-  local currentModule = LrApplicationView.getCurrentModuleName()
-  if currentModule ~= "develop" and not hasAdjust then
-    LrDialogs.message(
-      "FilmCrop - 请在修改照片模块中运行",
-      "由于 Lightroom SDK 限制，applyDevelopSettings 在图库模块中对虚拟副本无法生效。\n\n请升级到 Lightroom Classic 10.0+，或在「修改照片」模块中运行。",
-      "warning"
-    )
     return
   end
 
@@ -930,14 +904,6 @@ end
 
 local function startAutoWatch(jsonPath)
   logger:trace("=== 自动检测模式 ===")
-
-  local LrApplicationView = import 'LrApplicationView'
-  local catalog = LrApplication.activeCatalog()
-  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
-  if LrApplicationView.getCurrentModuleName() ~= "develop" and not hasAdjust then
-    logger:trace("自动检测: 不在 develop 模块且 Lightroom 版本不支持 adjustPhotoDevelopSettings，取消")
-    return false, "请在修改照片模块中运行（或升级 Lightroom 至 10.0+）"
-  end
 
   local catalog = LrApplication.activeCatalog()
   local selectedPhotos = catalog:getTargetPhotos()

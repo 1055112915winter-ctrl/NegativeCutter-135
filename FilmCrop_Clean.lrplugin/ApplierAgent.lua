@@ -9,8 +9,6 @@
 
 local LrLogger = import 'LrLogger'
 local LrApplication = import 'LrApplication'
-local LrApplicationView = import 'LrApplicationView'
-local LrDialogs = import 'LrDialogs'
 
 local logger = LrLogger('FilmCrop.ApplierAgent')
 logger:enable("logfile")
@@ -39,17 +37,6 @@ function ApplierAgent.applyCrop(photo, cropRegion)
 
   if not cropRegion then
     return false, "cropRegion参数为空"
-  end
-
-  -- 条件约束：旧版 LR 的 applyDevelopSettings 在图库模块对虚拟副本无效
-  -- 新版 LR (SDK 6.2+) 的 adjustPhotoDevelopSettings 可在任意模块工作
-  local catalog = LrApplication.activeCatalog()
-  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
-  local currentModule = LrApplicationView.getCurrentModuleName()
-  logger:trace("ApplierAgent 当前模块: " .. tostring(currentModule) .. ", adjustPhotoDevelopSettings=" .. tostring(hasAdjust))
-  if currentModule ~= "develop" and not hasAdjust then
-    logger:error("当前不在修改照片模块，且 Lightroom 版本不支持 adjustPhotoDevelopSettings")
-    return false, "请在「修改照片」模块中运行 FilmCrop（或升级 Lightroom 至 10.0+）"
   end
 
   -- 检查文件格式

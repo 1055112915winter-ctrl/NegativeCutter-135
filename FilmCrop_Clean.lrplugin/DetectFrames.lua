@@ -156,19 +156,6 @@ LrTasks.startAsyncTask(function()
   logger:trace("FilmCrop Python版检测开始 (v1.5-longedge)")
   logger:trace("=" .. string.rep("=", 60))
 
-  local LrApplicationView = import 'LrApplicationView'
-  local catalog = LrApplication.activeCatalog()
-  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
-  local currentModule = LrApplicationView.getCurrentModuleName()
-  if currentModule ~= "develop" and not hasAdjust then
-    LrDialogs.message(
-      "FilmCrop - 请在修改照片模块中运行",
-      "由于 Lightroom SDK 限制，applyDevelopSettings 在图库模块中对虚拟副本无法生效。\n\n请升级到 Lightroom Classic 10.0+，或在「修改照片」模块中运行。",
-      "warning"
-    )
-    return
-  end
-
   local catalog = LrApplication.activeCatalog()
   local selectedPhotos = catalog:getTargetPhotos()
 
