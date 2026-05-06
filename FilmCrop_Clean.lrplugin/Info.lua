@@ -19,12 +19,10 @@ return {
     {
       title = LOC "$$$/FilmCrop/Menu/DetectFrames=检测胶片帧",
       file = "DetectFrames.lua",
-      shortcut = "Ctrl+M",
     },
     {
       title = LOC "$$$/FilmCrop/Menu/BatchProcess=批量处理",
       file = "BatchProcess.lua",
-      shortcut = "Ctrl+Shift+M",
     },
   },
 
