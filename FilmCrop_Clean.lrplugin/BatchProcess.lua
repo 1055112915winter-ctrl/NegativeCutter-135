@@ -31,11 +31,13 @@ LrTasks.startAsyncTask(function()
   logger:trace("=" .. string.rep("=", 60))
 
   local LrApplicationView = import 'LrApplicationView'
+  local catalog = LrApplication.activeCatalog()
+  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
   local currentModule = LrApplicationView.getCurrentModuleName()
-  if currentModule ~= "develop" then
+  if currentModule ~= "develop" and not hasAdjust then
     LrDialogs.message(
       "FilmCrop - 请在修改照片模块中运行",
-      "由于 Lightroom SDK 限制，批量处理也需在修改照片模块中运行。\n\n请切换到上方的「修改照片」模块后重试。",
+      "由于 Lightroom SDK 限制，批量处理在图库模块中对虚拟副本无法生效。\n\n请升级到 Lightroom Classic 10.0+，或在「修改照片」模块中运行。",
       "warning"
     )
     return

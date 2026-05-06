@@ -41,12 +41,15 @@ function ApplierAgent.applyCrop(photo, cropRegion)
     return false, "cropRegion参数为空"
   end
 
-  -- 架构级硬约束：applyDevelopSettings 在图库模块中对虚拟副本无效
+  -- 条件约束：旧版 LR 的 applyDevelopSettings 在图库模块对虚拟副本无效
+  -- 新版 LR (SDK 6.2+) 的 adjustPhotoDevelopSettings 可在任意模块工作
+  local catalog = LrApplication.activeCatalog()
+  local hasAdjust = type(catalog.adjustPhotoDevelopSettings) == "function"
   local currentModule = LrApplicationView.getCurrentModuleName()
-  logger:trace("ApplierAgent 当前模块: " .. tostring(currentModule))
-  if currentModule ~= "develop" then
-    logger:error("当前不在修改照片模块，applyDevelopSettings 对虚拟副本将无效")
-    return false, "请在「修改照片」模块中运行 FilmCrop"
+  logger:trace("ApplierAgent 当前模块: " .. tostring(currentModule) .. ", adjustPhotoDevelopSettings=" .. tostring(hasAdjust))
+  if currentModule ~= "develop" and not hasAdjust then
+    logger:error("当前不在修改照片模块，且 Lightroom 版本不支持 adjustPhotoDevelopSettings")
+    return false, "请在「修改照片」模块中运行 FilmCrop（或升级 Lightroom 至 10.0+）"
   end
 
   -- 检查文件格式
