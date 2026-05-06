@@ -220,8 +220,6 @@ LrTasks.startAsyncTask(function()
   local expectedFrames = tonumber(dialogData.expectedFrames) or (prefs.expectedFrames or 6)
   logger:trace("用户指定的预期帧数: " .. tostring(expectedFrames))
 
-  LrDialogs.message("FilmCrop", "开始处理，请稍候...\n每帧将创建为虚拟副本", "info")
-
   local processedCount = 0
   local totalVirtualCopies = 0
   local errorMessages = {}
