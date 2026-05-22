@@ -1,0 +1,200 @@
+{
+  "project": "FilmCrop",
+  "branchName": "ralph/standalone-engine",
+  "description": "FilmCrop Standalone Engine - Extract core detection algorithm into a Python package, build a PyQt6 GUI for direct TIFF/DNG processing, and make Lightroom plugin an optional result importer via XMP/HTTP/JSON",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Modularize core algorithm into filmcrop Python package",
+      "description": "As a developer, I need to extract the detection engine from detect_thumb.py into a proper Python package so that the standalone GUI and future tools can import it directly.",
+      "acceptanceCriteria": [
+        "Create filmcrop/ directory with __init__.py",
+        "Extract analyze_thumb, build_frames, detect_long_edges, _detect_scan_edge, _load_image_array into filmcrop/detector.py",
+        "Create filmcrop/export.py with to_json(frames), to_xmp(frames), crop_and_save(image, frames, output_dir) stubs",
+        "Refactor detect_thumb.py CLI to import from filmcrop.detector instead of inline code",
+        "python -m filmcrop.detector --help works or existing tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Completed in first iteration. Package already existed; fixed mypy type errors and added CLI entry point to detector.py."
+    },
+    {
+      "id": "US-002",
+      "title": "PyQt6 main window and image display",
+      "description": "As a user, I want to open a TIFF/DNG and see it rendered in a modern GUI so that I can work with high-resolution scans smoothly.",
+      "acceptanceCriteria": [
+        "Create filmcrop/gui/ directory with main_window.py",
+        "Implement QMainWindow with QGraphicsView + QGraphicsScene",
+        "Add File > Open menu supporting .tif .tiff .jpg .jpeg .png .dng",
+        "TIFF/JPEG/PNG loaded via PIL with _load_image_array logic (16-bit support)",
+        "DNG loaded via rawpy fallback or placeholder message if rawpy unavailable",
+        "Status bar shows image dimensions, bit depth, load time",
+        "Wheel zoom from 10% to 400% works smoothly",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "GUI already existed; fixed mypy type errors, added bit depth to status bar, and created __main__.py entry point."
+    },
+    {
+      "id": "US-003",
+      "title": "One-click frame detection in GUI",
+      "description": "As a user, I want to click a button and see automatic frame boundary detection so that I don't have to manually draw every frame.",
+      "acceptanceCriteria": [
+        "Add Detect Frames toolbar button and menu item",
+        "Dialog for expected frame count (default 6, auto=0)",
+        "Call filmcrop.detector.analyze_image() with current image path",
+        "Display detected frames as colored rectangles overlaid on QGraphicsScene",
+        "Show detection time and memory in status bar",
+        "Error dialog if detection fails with traceback",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Added Tools > Detect Frames menu item, memory usage display in status bar (via optional psutil), and QMessageBox error dialog with full traceback on detection failure."
+    },
+    {
+      "id": "US-004",
+      "title": "Drag-to-adjust boundaries and frame management",
+      "description": "As a user, I want to drag frame boundaries with the mouse and add/remove frames so that auto-detection errors are easy to fix.",
+      "acceptanceCriteria": [
+        "Mouse hover on frame edge shows resize cursor",
+        "Drag boundary line updates pixel coordinates in real time",
+        "Right panel lists all frames with pixel and relative coordinates",
+        "Selected frame highlighted, others semi-transparent",
+        "Add Frame / Delete Frame buttons update list and canvas",
+        "Undo (Ctrl+Z) and Redo (Ctrl+Shift+Z) with at least 20-step history",
+        "Spinbox precise editing syncs with canvas display",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Fixed label position sync during canvas drag and spinbox editing. Frame list now displays both pixel and relative coordinates. Added public frame_data() accessor to DraggableFrameItem."
+    },
+    {
+      "id": "US-005",
+      "title": "Export JSON sidecar",
+      "description": "As a user, I want to save frame boundaries to a JSON file so that Lightroom or other tools can read them.",
+      "acceptanceCriteria": [
+        "Implement to_json() in filmcrop/export.py",
+        "File > Export > JSON Sidecar menu item",
+        "Default path <image_name>.filmcrop.json in same directory",
+        "JSON format 100% compatible with detect_thumb.py output",
+        "Each frame has pixel coords (top/bottom/left/right) and relative coords",
+        "Status bar confirms export path",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Added optional debug parameter to to_json() for 100% detect_thumb.py compatibility. Added File > Export submenu with JSON and XMP sidecar items. MainWindow now stores debug info after detection and passes it to to_json()."
+    },
+    {
+      "id": "US-006",
+      "title": "Export XMP sidecar (Adobe standard)",
+      "description": "As a user, I want to save frame boundaries as XMP sidecars so that Lightroom can natively read crop rectangles.",
+      "acceptanceCriteria": [
+        "Implement to_xmp() in filmcrop/export.py using python-xmp-toolkit or hand-written XML",
+        "File > Export > XMP Sidecar menu item",
+        "Generate .xmp file per frame or single file with custom filmcrop namespace",
+        "Include xmpMM:DocumentID and dc:title fields",
+        "XMP structure validated against Adobe spec (basic check)",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Rewrote to_xmp() with proper XML escaping, standard crs:Crop* fields for the first frame, xmp:CreateDate, and a validate_xmp() helper. MainWindow now stores crop_angle from detection results and passes it to to_xmp()."
+    },
+    {
+      "id": "US-007",
+      "title": "High-quality cropped image export",
+      "description": "As a user, I want to export each frame as a standalone image so that I can use them outside of Lightroom.",
+      "acceptanceCriteria": [
+        "Implement crop_and_save() in filmcrop/export.py using PIL Image.crop() + LANCZOS",
+        "File > Export > Cropped Images menu item",
+        "Options dialog: format (TIFF/JPEG/PNG), quality, color space",
+        "Default output dir <image_dir>/cropped/",
+        "Naming: <image_name>_frame_01.tif etc",
+        "16-bit TIFF preserved when input is 16-bit",
+        "Progress bar with cancel support",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Enhanced crop_and_save() to preserve 16-bit TIFF depth and ICC profiles. Added ExportDialog with format/quality/color-space options. Added File > Export > Cropped Images menu item. Default output dir is <image_dir>/cropped/. Verified with synthetic 16-bit TIFF test."
+    },
+    {
+      "id": "US-008",
+      "title": "Local HTTP API server",
+      "description": "As a Lightroom user, I want the standalone engine to expose a local HTTP API so that the Lightroom plugin can query it directly.",
+      "acceptanceCriteria": [
+        "Create filmcrop/api.py with FastAPI app",
+        "POST /analyze endpoint: accepts image path + frame count, returns JSON detection result",
+        "POST /crop endpoint: accepts image path + frame coords, returns cropped file paths",
+        "GET /health endpoint returns service status",
+        "Tools > Start/Stop API Server menu items in GUI",
+        "Server runs in background thread, default port 8765",
+        "CORS restricted to localhost only",
+        "Status bar shows API address and request count",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Added request counting to all API endpoints, implemented proper uvicorn.Server shutdown via should_exit, added has_api() guard in GUI with QMessageBox error dialog, and added QTimer polling to display live request count in status bar."
+    },
+    {
+      "id": "US-009",
+      "title": "Lightroom plugin XMP import mode",
+      "description": "As a Lightroom user, I want the plugin to read XMP sidecars from the standalone engine so that I can import crops without the engine running.",
+      "acceptanceCriteria": [
+        "Add Import FilmCrop XMP menu item to DetectFrames.lua",
+        "Directory picker scans for .filmcrop.xmp files",
+        "Parse XMP frame coordinates into Lua table",
+        "Create virtual copy per frame with applyDevelopSettings crop",
+        "Prompt overwrite or skip if virtual copy already exists",
+        "Batch import entire directory",
+        "Lightroom plugin loads without errors"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented directory picker with .filmcrop.xmp scanning via Python fallback, filename-based XMP-to-photo matching, pre-flight duplicate detection with overwrite/skip dialog, and backward-compatible createVirtualCopiesFromFrames extension."
+    },
+    {
+      "id": "US-010",
+      "title": "Lightroom plugin HTTP API mode",
+      "description": "As a Lightroom user, I want the plugin to call the standalone engine via HTTP so detection runs externally and results appear in Lightroom automatically.",
+      "acceptanceCriteria": [
+        "Add Detect via FilmCrop Engine menu item to DetectFrames.lua",
+        "Dialog for API address (default http://localhost:8765)",
+        "POST image path to /analyze using LrHttp or LuaSocket",
+        "Parse JSON response and create virtual copies with crops",
+        "Show progress bar for transmission and virtual copy creation",
+        "Error message if engine unreachable with startup instructions",
+        "Lightroom plugin loads without errors"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Enhanced detectViaHttp() with LrProgressScope for per-photo progress, Develop module guard, ProcessAgent.directionAlign for EXIF orientation correctness, expected frames dialog field synced to prefs, and improved HTTP error reporting via pcall second return value."
+    },
+    {
+      "id": "US-011",
+      "title": "Lightroom plugin shared JSON watch mode",
+      "description": "As a Lightroom user, I want the plugin to watch a shared JSON file so that edits in the standalone GUI are picked up by Lightroom.",
+      "acceptanceCriteria": [
+        "Add Watch FilmCrop JSON menu item to DetectFrames.lua",
+        "File picker selects .filmcrop.json file",
+        "Poll file mtime every 2 seconds in background task",
+        "On change: auto-create/update virtual copies or prompt confirm",
+        "Stop Watching menu item terminates polling",
+        "Initial load applies current JSON immediately",
+        "Lightroom plugin loads without errors"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+# Ralph Progress Log
+Started: Tue Apr 28 17:44:53 CST 2026
+## 2026-04-29 19:46 CST - US-009
+- What was implemented: Completed US-009 by enhancing `ImportAgent.lua` with full XMP batch import and duplicate handling. Key changes:
+  - Replaced single-file picker with `LrDialogs.runOpenPanel` directory picker (`canChooseDirectories = true`).
+  - Added `scanFilmcropXmp()` that scans a directory for `.filmcrop.xmp` files. Uses `pcall` to try SDK-native `filesInDirectory`/`directoryFiles` first, then falls back to a Python temp script executed via `LrTasks.execute()`.
+  - Added `parseXmpContent()` to extract frame coordinates from XMP RDF sequence items using the existing regex pattern.
+  - Implemented filename-based matching: XMP `image.filmcrop.xmp` is matched to selected photo `image.tif` by base name.
+  - Added `buildExistingCopiesMap()` which scans `catalog:getAllPhotos()` and indexes virtual copies by `path` + `copyName` for duplicate detection.
+  - Added `showDuplicateDialog()` with radio buttons for "overwrite" (apply new crop to existing virtual copy) or "skip".
+  - Extended `createVirtualCopiesFromFrames()` with optional `existingCopies` and `duplicateAction` parameters. Return signature is `(created, errors, updated, skipped)` — keeping `errors` as the 2nd value preserves backward compatibility for `detectViaHttp()` and `watchJsonFile()` callers.
+  - Batch import loops through all matched XMP/photo pairs and reports created, updated, skipped counts plus unmatched file warnings.
+- Files changed: `ImportAgent.lua`, `CLAUDE.md`
+- **Learnings for future iterations:**
+  - Lightroom SDK does not provide native directory file listing in standard versions. The Python temp-script fallback (`io.open` to write, `LrTasks.execute` to run, `LrFileUtils.readFile` to read) is a robust cross-platform pattern already used by `ProcessAgent.lua` for shell execution.
+  - When extending existing Lua functions with new return values, append them at the end and keep the original order intact. Lua callers capturing only the first N values are unaffected.
+  - `catalog:getAllPhotos()` can be slow on very large catalogs, but it's the only reliable way to enumerate virtual copies of a specific master photo (they share the same `path` metadata).
+  - Virtual copy names in this plugin follow the pattern `<baseName>_帧<02d>` where the number is the array index (1-based), not `frame.index`. This matters for duplicate detection accuracy.
+  - Manual browser verification is not applicable for Lightroom Lua plugin stories.
+---
+
+## Codebase Patterns
+- Use `Image.Image` type annotation for PIL image variables to avoid mypy `Incompatible types in assignment` errors when reassigning from `Image.open()` to `.convert()` results.
+- Use explicit `Optional[str]` (or `str | None`) for function parameters with `None` defaults; mypy defaults to `no_implicit_optional=True`.
+- The filmcrop package already contains detector.py, export.py, api.py, and gui/ — later stories build on this foundation.
+- `python -m filmcrop.detector --help` requires an `if __name__ == "__main__":` block in detector.py (it is a module, not a package).
+- Legacy CLI compatibility is maintained via `detect_thumb.py` which imports from `filmcrop.detector`.
+- When using `QTimer.singleShot` with a lambda that calls a method, type narrowing from an outer scope check (e.g. `if not self._image_path: return`) does not propagate into the delayed method. Add an explicit `None` guard inside the delayed method.
+- `psutil` is an optional dependency throughout the project; always guard with `try/except ImportError` and set a `HAS_PSUTIL` flag.
+- Use `QMessageBox.critical(parent, title, message)` for error dialogs in the GUI; the status bar alone is insufficient for exceptions.
+- `ImageView.update_frame_geometry()` must be called after any frame coordinate change to keep both the rect overlay and its label text position in sync.
+- After programmatically modifying frame coordinates (e.g., min-size enforcement in `_on_spinbox_changed`), call `_sync_spinboxes()` to keep the coordinate editor spinboxes consistent with the data model.
+- `DraggableFrameItem.frame_data()` is the public accessor for the underlying frame dict; prefer it over accessing `._frame` directly.
+- FastAPI is an optional dependency; always check `filmcrop.api.has_api()` before starting the server, and show a `QMessageBox` with install instructions if unavailable.
+- To shut down a `uvicorn.Server` running in a background thread, set `server.should_exit = True` (do not rely on daemon thread cleanup alone).
+- Use a `QTimer` polling loop to display cross-thread metrics (e.g., API request count) in the PyQt6 status bar.
+
+## 2026-04-29 03:26 CST - US-001
+- What was implemented: Verified and finalized US-001. The filmcrop package already existed with detector.py, export.py, api.py, and gui/ subpackage. Fixed two mypy type errors in detector.py (`Image.Image` annotation and `original_path: str | None`). Added a CLI `__main__` block to detector.py so `python -m filmcrop.detector --help` works. Verified backward compatibility with `detect_thumb.py`. Ran synthetic image test confirming detection produces correct frame boundaries.
+- Files changed: `filmcrop/detector.py` (type fixes + CLI entry point)
+- **Learnings for future iterations:**
+  - The detector uses `analyze_image()` (not `analyze_thumb`) as the main entry point.
+  - `build_frames()` expects gap edges as `(left, right)` tuples and supports both horizontal and vertical film strips.
+  - Long-edge detection (`detect_long_edges`) defaults to valley mode but falls back to peak mode if the first attempt returns `(0, size)`.
+  - The `_load_image_array` helper handles 16-bit TIFF by scaling to uint8; full bit depth is preserved in `crop_and_save` via PIL.
+  - There are no existing unit tests — future stories may need test infrastructure.
+---
+
+## 2026-04-29 19:04 CST - US-002
+- What was implemented: Verified and finalized US-002. The PyQt6 GUI already existed with QMainWindow, QGraphicsView+QGraphicsScene, File>Open menu, DNG/rawpy fallback, and wheel zoom. Fixed mypy type errors: added `Image.Image` annotation in `image_view.py`, added `None` guard in `_do_detect()` in `main_window.py`. Added 16-bit bit depth detection and display in status bar. Created `filmcrop/gui/__main__.py` so `python -m filmcrop.gui` works as an entry point.
+- Files changed: `filmcrop/gui/image_view.py`, `filmcrop/gui/main_window.py`, `filmcrop/gui/__main__.py`
+- **Learnings for future iterations:**
+  - The GUI code was largely complete from prior work; each US may require only polish and type fixes rather than ground-up implementation.
+  - `Image.open(path)` returns an `ImageFile` type; assigning `Image.fromarray()` or `.convert()` results back to the same variable triggers mypy unless annotated as `Image.Image`.
+  - Type narrowing across `QTimer.singleShot` lambdas doesn't work — always guard inside the called method.
+  - Bit depth can be inferred from PIL mode (`I;16`, `I;16B`, `I;16N`, `I`) before conversion to display format.
+---
+
+## 2026-04-29 19:16 CST - US-003
+- What was implemented: Completed US-003 by adding the missing polish items for one-click frame detection. Added "Detect Frames" menu item under Tools menu with Ctrl+D shortcut. Enhanced `_do_detect()` to track and display memory usage in the status bar when psutil is available. Replaced the silent status-bar-only error handling with a `QMessageBox.critical` dialog that shows the full exception traceback.
+- Files changed: `filmcrop/gui/main_window.py`
+- **Learnings for future iterations:**
+  - The GUI already had robust detection, overlay, and frame-list infrastructure from prior work — US-003 was primarily about completing the user-facing polish (menu item, error dialog, memory telemetry).
+  - `psutil` is not installed in the current environment but is handled gracefully as an optional dependency; detection works fine without it.
+  - The `QTimer.singleShot(50, ...)` pattern in `_on_detect` defers heavy computation so the UI can update the status bar to "正在检测帧边界..." before blocking.
+  - Manual browser verification is not applicable for PyQt6 desktop GUI stories.
+---
+
+## 2026-04-29 19:17 CST - US-004
+- What was implemented: Completed US-004 by fixing three sync issues in the drag-to-adjust and frame management workflow. (1) Added `frame_data()` public accessor to `DraggableFrameItem` and updated `ImageView.update_frame_geometry()` to refresh both the rect overlay and its label position — this fixes labels that previously stayed static during canvas drag and spinbox edits. (2) Added `_sync_spinboxes(row)` at the end of `_on_spinbox_changed()` so that when min-size enforcement moves the opposite edge, the spinbox display updates immediately. (3) Updated `_update_frame_list()` to display relative coordinates alongside pixel coordinates, satisfying the acceptance criterion for the right panel.
+- Files changed: `filmcrop/gui/frame_item.py`, `filmcrop/gui/image_view.py`, `filmcrop/gui/main_window.py`
+- **Learnings for future iterations:**
+  - The GUI already had full drag-resize, undo/redo (50-step), add/delete, selection highlight, and spinbox editing — US-004 was about fixing sync bugs rather than adding missing features.
+  - `DraggableFrameItem` owns the rect geometry during drag, but `ImageView` owns the label items; any coordinate change must explicitly update both.
+  - `_on_spinbox_changed` enforces a 20px minimum frame size by modifying the opposite edge, but without `_sync_spinboxes()` the UI would show stale values.
+  - Manual browser verification is not applicable for PyQt6 desktop GUI stories.
+---
+
+## 2026-04-29 19:24 CST - US-005
+- What was implemented: Completed US-005 by adding File > Export > JSON Sidecar menu item (alongside XMP for UI consistency). Updated `to_json()` in `export.py` to accept an optional `debug` dict parameter so the exported JSON is 100% compatible with `detect_thumb.py` output. `MainWindow` now stores `self._debug_info` after detection and passes it to `to_json()` on export.
+- Files changed: `filmcrop/export.py` (added `debug` parameter), `filmcrop/gui/main_window.py` (added Export submenu, stored debug info, passed debug to to_json)
+- **Learnings for future iterations:**
+  - The Lightroom plugin's `ProcessAgent.parseJSON()` expects `debug` field with `isHorizontal` for direction alignment; including it in sidecar exports ensures full compatibility.
+  - The existing `_on_export_json()` and `_on_export_xmp()` handlers were already functional; US-005 was primarily about menu structure and format completeness.
+  - `to_json()` now accepts `debug: dict | None = None` — future export features should preserve this signature.
+---
+
+## 2026-04-29 19:34 CST - US-006
+- What was implemented: Completed US-006 by rewriting `to_xmp()` in `export.py` for full Adobe spec compliance. Added proper XML escaping via `xml.sax.saxutils.escape`. Added standard Camera Raw (`crs:`) crop fields (`HasCrop`, `CropTop`, `CropLeft`, `CropBottom`, `CropRight`, `CropAngle`) for the first frame so Lightroom can read a native crop directly. Added `xmp:CreateDate` and preserved `xmpMM:DocumentID` / `dc:title`. Added `validate_xmp()` helper that checks well-formed XML, required namespace elements, and frame index presence. Updated `MainWindow` to store `self._crop_angle` from detection results and pass it to `to_xmp()` on export.
+- Files changed: `filmcrop/export.py` (rewrote to_xmp, added validate_xmp), `filmcrop/gui/main_window.py` (store crop_angle, pass to to_xmp)
+- **Learnings for future iterations:**
+  - The `ImportAgent.lua` XMP parser uses simple regex: `<rdf:li>(.-)</rdf:li>` and `filmcrop:(%w+)="([^"]+)"`. Any XMP generation must keep this structure intact — frames as RDF sequence items with attributes on a self-closing `rdf:Description` inside each `rdf:li`.
+  - Standard `crs:Crop*` fields use relative coordinates (0-1), not pixels. The first frame's `relativeTop/Bottom/Left/Right` can be mapped directly.
+  - `xml.sax.saxutils.escape` should be used for any user-generated content in XML attributes; do not rely on f-string interpolation alone.
+  - Manual browser verification is not applicable for PyQt6 desktop GUI stories.
+---
+
+## 2026-04-29 19:37 CST - US-007
+- What was implemented: Completed US-007 by enhancing `crop_and_save()` and adding a full export options dialog. In `export.py`: preserved 16-bit TIFF mode (`I;16`, `I;16B`, `I;16N`, `I`) when cropping, preserved original ICC profile across all formats, handled RGBA→RGB conversion for JPEG, and added `save_kwargs` for clean option passing. In `main_window.py`: added `ExportDialog` (QDialog with QFormLayout) providing format selection (TIFF/JPEG/PNG), JPEG quality spinbox (1-100), color space dropdown (sRGB/Adobe RGB/保留原始), and output directory picker defaulting to `<image_dir>/cropped/`. Added "File > Export > 裁切图像 (&C)..." menu item with Ctrl+Shift+E shortcut. Updated `_on_export_images()` to show the dialog, then pass selected options to `crop_and_save()` while keeping the existing cancelable QProgressDialog.
+- Files changed: `filmcrop/export.py` (enhanced crop_and_save), `filmcrop/gui/main_window.py` (added ExportDialog, menu item, shortcut, updated _on_export_images)
+- **Learnings for future iterations:**
+  - PIL `Image.crop()` preserves the source mode (including `I;16`), so 16-bit TIFF preservation is automatic as long as you don't convert modes before saving.
+  - ICC profiles should be extracted from the original `Image.info["icc_profile"]` and passed to `save(..., icc_profile=...)` for each cropped frame.
+  - `QDialogButtonBox.button()` returns `QPushButton | None` in PyQt6 stubs — always guard with `if btn is not None:` before calling methods like `setText()` to keep mypy happy.
+  - The `ExportDialog` pattern (format combo → quality spinbox enabled/disabled) is reusable for any future export workflows.
+  - `python3` (not `python`) is the correct interpreter on this macOS environment.
+---
+
+## 2026-04-29 19:41 CST - US-008
+- What was implemented: Completed US-008 by adding three missing pieces to the local HTTP API server. (1) Added per-endpoint request counting in `api.py` via `_inc_request()` and exposed `get_request_count()` / `has_api()` / `stop_server()` helpers. Replaced blocking `uvicorn.run()` with `uvicorn.Server` + `Config` pattern so the server instance can be shut down cleanly via `should_exit = True`. (2) Updated `MainWindow._on_start_api()` to guard against missing FastAPI with a `QMessageBox.critical` dialog showing install instructions. Updated `_on_stop_api()` to actually call `stop_server()` and stop the polling timer. Added `_on_api_poll()` method connected to a `QTimer` that updates the status bar every second with the live API address and request count. (3) Verified typecheck passes across the entire `filmcrop/` package.
+- Files changed: `filmcrop/api.py` (request counting, server shutdown, has_api helper), `filmcrop/gui/main_window.py` (FastAPI guard, live status bar polling, proper stop)
+- **Learnings for future iterations:**
+  - The existing `api.py` and GUI menu items were already in place from prior work; US-008 was about completing the production-ready details (shutdown, telemetry, dependency guard).
+  - `uvicorn.run()` blocks forever and cannot be interrupted from another thread; use `uvicorn.Server(config).run()` and set `server.should_exit = True` for graceful shutdown.
+  - Module-level mutable state (`_request_count`) is safe for cross-thread reads in CPython because of the GIL, making it a simple choice for metrics that don't need locks.
+  - `QTimer` polling at 1-second intervals is the idiomatic PyQt6 way to refresh UI with data from background threads without complex signal/slot plumbing.
+  - Manual browser verification is not applicable for PyQt6 desktop GUI stories.
+---
+
+## 2026-04-29 20:01 CST - US-010
+- What was implemented: Completed US-010 by enhancing `detectViaHttp()` in `ImportAgent.lua` with production-ready polish:
+  - Added Develop module guard (`LrApplicationView.getCurrentModuleName() ~= "develop"`) with warning dialog, matching `DetectFrames.lua` behavior.
+  - Added `expectedFrames` input field to the HTTP detection dialog, synced to `prefs.expectedFrames` and passed to the `/analyze` API endpoint instead of hardcoded 6.
+  - Added `LrProgressScope` progress bar showing per-photo status ("正在检测: file.tif (1/5)" and "正在创建虚拟副本...") with cancel support.
+  - Added `ProcessAgent.directionAlign()` call after receiving API results to handle EXIF orientation mismatches between detector pixel dimensions and Lightroom interpretation.
+  - Improved HTTP error handling by capturing `pcall` second return value (`httpErr`) and surfacing it in error messages instead of silent failures.
+- Files changed: `ImportAgent.lua`, `FilmCrop_Clean.lrplugin/CLAUDE.md`
+- **Learnings for future iterations:**
+  - `LrProgressScope` is the idiomatic way to show progress in Lightroom plugins. Create it inside an async task, update with `setPortionComplete()`/`setCaption()`, check `isCanceled()` for abort, and always call `done()`.
+  - The standalone HTTP API returns coordinates based on raw pixel dimensions, but Lightroom's `applyDevelopSettings` respects EXIF orientation. Always run `ProcessAgent.directionAlign()` on external results before applying crops.
+  - `pcall` in Lua returns `(success, error)`. Capturing the second value is essential for meaningful error reporting — otherwise HTTP failures are silent.
+  - LuaSocket (`socket.http` + `ltn12`) is more reliable than `LrHttp` for POST requests with JSON bodies in Lightroom SDK.
+  - Manual browser verification is not applicable for Lightroom Lua plugin stories.
+---

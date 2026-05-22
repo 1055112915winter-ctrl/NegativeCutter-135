@@ -13,3 +13,22 @@
 *.log
 filmcrop_e2e.json
 compare_schemes.py
+
+# NegativeCutter-135 plugin dev artifacts
+NegativeCutter-135.lrplugin/build/
+NegativeCutter-135.lrplugin/dist/
+NegativeCutter-135.lrplugin/.mypy_cache/
+NegativeCutter-135.lrplugin/__pycache__/
+NegativeCutter-135.lrplugin/filmcrop/__pycache__/
+NegativeCutter-135.lrplugin/*.spec
+NegativeCutter-135.lrplugin/detect_debug.log
+
+# Release packages (source only, not binaries)
+release/
+*.zip
+
+# Secrets / credentials
+.env
+.env.*
+*.pem
+*.key
