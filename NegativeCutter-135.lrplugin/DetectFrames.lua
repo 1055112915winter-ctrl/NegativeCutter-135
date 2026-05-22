@@ -155,7 +155,7 @@ end
 ]]--
 LrTasks.startAsyncTask(function()
   logger:trace("=" .. string.rep("=", 60))
-  logger:trace("NegativeCutter Python版检测开始 (v2.4.0)")
+  logger:trace("NegativeCutter Python版检测开始 (v2.4.1)")
   logger:trace("=" .. string.rep("=", 60))
 
   local catalog = LrApplication.activeCatalog()
@@ -281,18 +281,26 @@ LrTasks.startAsyncTask(function()
     if #errorMsg > 500 then
       errorMsg = string.sub(errorMsg, 1, 500) .. "\n... (更多错误)"
     end
-    LrDialogs.message(
-      "NegativeCutter - 处理完成 (部分失败)",
-      string.format("成功处理: %d 个文件\n创建虚拟副本: %d\n失败: %d\n\n错误详情:\n%s",
+    local failResult = LrDialogs.confirm(
+      "⚠️  检测完成（部分失败）",
+      string.format("成功处理 %d 个文件 · 创建 %d 个虚拟副本\n失败 %d 个\n\n错误详情:\n%s",
         processedCount, totalVirtualCopies, #errorMessages, errorMsg),
-      "warning"
+      "🐛 反馈问题",
+      "关闭"
     )
+    if failResult == "ok" then
+      dofile(LrPathUtils.child(pluginPath, "Feedback.lua"))
+    end
   else
-    LrDialogs.message(
-      "NegativeCutter - 处理完成",
-      string.format("成功处理 %d 个文件\n共创建 %d 个虚拟副本\n\n请在图库中查看各个帧的虚拟副本",
+    local donateResult = LrDialogs.confirm(
+      "✅ 检测完成",
+      string.format("成功处理 %d 个文件\n共创建 %d 个虚拟副本\n\n各个帧的虚拟副本已就绪，\n请在图库模块中查看。",
         processedCount, totalVirtualCopies),
-      "info"
+      "☕ 请作者喝咖啡",
+      "关闭"
     )
+    if donateResult == "ok" then
+      ProcessAgent.openSponsorImage()
+    end
   end
 end)

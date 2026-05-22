@@ -27,7 +27,7 @@ end
 -- 批量处理主函数
 LrTasks.startAsyncTask(function()
   logger:trace("=" .. string.rep("=", 60))
-  logger:trace("NegativeCutter 批量处理开始 (v2.4.0)")
+  logger:trace("NegativeCutter 批量处理开始 (v2.4.1)")
   logger:trace("=" .. string.rep("=", 60))
 
   local catalog = LrApplication.activeCatalog()
@@ -145,7 +145,7 @@ LrTasks.startAsyncTask(function()
     stats.success, stats.total, stats.framesCreated))
 
   local report = string.format(
-    "处理统计:\n  • 总文件: %d\n  • 成功: %d\n  • 失败: %d\n  • 创建虚拟副本: %d",
+    "总文件 %d · 成功 %d · 失败 %d\n创建虚拟副本 %d",
     stats.total, stats.success, stats.total - stats.success, stats.framesCreated)
 
   if #stats.errors > 0 then
@@ -153,8 +153,24 @@ LrTasks.startAsyncTask(function()
     if #stats.errors > 5 then
       errorDetail = errorDetail .. "\n  ... 等 " .. (#stats.errors - 5) .. " 个错误"
     end
-    LrDialogs.message("NegativeCutter - 批量处理完成", report .. "\n\n错误详情:\n  • " .. errorDetail, "warning")
+    local failResult = LrDialogs.confirm(
+      "⚠️  批量处理完成（部分失败）",
+      report .. "\n\n错误详情:\n  • " .. errorDetail,
+      "🐛 反馈问题",
+      "关闭"
+    )
+    if failResult == "ok" then
+      dofile(LrPathUtils.child(pluginPath, "Feedback.lua"))
+    end
   else
-    LrDialogs.message("NegativeCutter - 批量处理完成", report, "info")
+    local donateResult = LrDialogs.confirm(
+      "✅ 批量处理完成",
+      report .. "\n\n所有文件已成功处理。",
+      "☕ 请作者喝咖啡",
+      "关闭"
+    )
+    if donateResult == "ok" then
+      ProcessAgent.openSponsorImage()
+    end
   end
 end)

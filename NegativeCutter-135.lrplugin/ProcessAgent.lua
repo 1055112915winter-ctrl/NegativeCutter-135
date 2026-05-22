@@ -405,4 +405,48 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
   return createdCount, nil
 end
 
+-- ------------------------------------------------------------------
+-- openSponsorImage — 赞助弹窗
+-- ------------------------------------------------------------------
+function ProcessAgent.openSponsorImage()
+  local LrDialogs = import 'LrDialogs'
+  local LrView = import 'LrView'
+
+  local f = LrView.osFactory()
+
+  -- 查找赞赏码图片
+  local sponsorPath = LrPathUtils.child(pluginPath, "sponsor.png")
+  if LrFileUtils.exists(sponsorPath) ~= true then
+    sponsorPath = LrPathUtils.child(pluginPath, "sponsor.jpg")
+  end
+  local hasSponsor = LrFileUtils.exists(sponsorPath)
+
+  -- 赞赏码不存在：直接提示，不放无效按钮
+  if not hasSponsor then
+    LrDialogs.message(
+      "支持 NegativeCutter",
+      "请将赞赏码截图命名为 sponsor.png 或 sponsor.jpg，\n放在插件目录后即可扫码支持。\n\n作者：李冬天（小红书：李冬天 SimplyWinter）",
+      "info"
+    )
+    return
+  end
+
+  -- 赞赏码存在：简洁双按钮弹窗（打开赞赏码 / 关闭）
+  local result = LrDialogs.confirm(
+    "☕ 请作者喝咖啡",
+    "从 135 胶片扫描中自动识别帧边界，省去逐张手动裁剪的繁琐。\n\n如果你发现它节省了时间，一杯咖啡（¥19.9）将帮助我\n持续优化检测算法、适配更多胶片格式。",
+    "打开赞赏码",
+    "关闭"
+  )
+
+  if result == "ok" then
+    logger:trace("打开赞赏码: " .. sponsorPath)
+    if MAC_ENV then
+      LrTasks.execute('open "' .. sponsorPath .. '"')
+    elseif WIN_ENV then
+      LrTasks.execute('start "" "' .. sponsorPath .. '"')
+    end
+  end
+end
+
 return ProcessAgent

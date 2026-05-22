@@ -32,7 +32,7 @@ return {
 
         f:row {
           f:static_text {
-            title = "版本: 2.4.0",
+            title = "版本: 2.4.1",
           },
         },
 
