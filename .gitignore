@@ -1,18 +1,42 @@
-*tif
-*jpg
-.*swp
+# Images / scan files
+*.tif
+*.jpg
+*.png
+
+# Editor temp files
+.*.swp
 *~
-
-# dev symlink for batch tests (points to ../../../test_files in master root)
-/test_files
-
-# macOS / editor / temp
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
 
 # FilmCrop runtime artifacts
 *.log
 filmcrop_e2e.json
 compare_schemes.py
+
+# Dev scripts (root level only)
+diag_120.py
+draw_detection.py
+gen_all_previews.py
+refine_120.py
+test_opencv_detect.py
+test_detect_batch.py
+
+# Old Ruby version
+filmcrop.rb
+README
+
+# Dev directories
+.claude/
+FilmCrop_Clean.lrplugin/
+docs/
+scripts/
+vendor-analysis/
 
 # NegativeCutter-135 plugin dev artifacts
 NegativeCutter-135.lrplugin/build/
@@ -20,14 +44,20 @@ NegativeCutter-135.lrplugin/dist/
 NegativeCutter-135.lrplugin/.mypy_cache/
 NegativeCutter-135.lrplugin/__pycache__/
 NegativeCutter-135.lrplugin/filmcrop/__pycache__/
-NegativeCutter-135.lrplugin/*.spec
 NegativeCutter-135.lrplugin/detect_debug.log
 
-# Release packages (source only, not binaries)
+# Tests and dev scripts inside plugin
+NegativeCutter-135.lrplugin/tests/
+NegativeCutter-135.lrplugin/scripts/
+NegativeCutter-135.lrplugin/CLAUDE.md
+NegativeCutter-135.lrplugin/debug_visualize.py
+NegativeCutter-135.lrplugin/filmcrop/gui/
+
+# Release packages
 release/
 *.zip
 
-# Secrets / credentials
+# Secrets
 .env
 .env.*
 *.pem
