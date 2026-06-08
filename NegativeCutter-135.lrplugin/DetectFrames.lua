@@ -39,8 +39,8 @@ local function processPhotoWithPreview(catalog, photo, i, total, errorMessages, 
   local fileName = photo:getFormattedMetadata('fileName')
   logger:trace(string.format("处理文件 %d/%d: %s", i, total, fileName))
 
-  -- 步骤1: 获取缩略图
-  local thumbPath, thumbErr = ProcessAgent.extractThumbnail(photo)
+  -- 步骤1: 获取缩略图（先尝试 2048，大 DNG 在 8192 下容易失败）
+  local thumbPath, thumbErr = ProcessAgent.extractThumbnail(photo, 2048)
   if not thumbPath then
     local msg = fileName .. ": 缩略图获取失败 - " .. (thumbErr or "未知")
     logger:error(msg)
@@ -51,7 +51,11 @@ local function processPhotoWithPreview(catalog, photo, i, total, errorMessages, 
   -- 步骤2: Python 分析
   local originalPath = photo:getRawMetadata("path")
   local formatHint = prefs.filmFormat or nil
-  local result, analyzeError = ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath, formatHint)
+  local photoDimensions = photo:getRawMetadata("dimensions")
+  local lrWidth = photoDimensions and photoDimensions.width or nil
+  local lrHeight = photoDimensions and photoDimensions.height or nil
+  local result, analyzeError = ProcessAgent.analyzeWithPython(
+    thumbPath, expectedFrames, originalPath, formatHint, lrWidth, lrHeight)
 
   if not result or not result.frames or #result.frames == 0 then
     local msg = fileName .. ": 分析失败 - " .. (analyzeError or "未检测到帧")
@@ -155,7 +159,7 @@ end
 ]]--
 LrTasks.startAsyncTask(function()
   logger:trace("=" .. string.rep("=", 60))
-  logger:trace("NegativeCutter Python版检测开始 (v2.4.1)")
+  logger:trace("NegativeCutter Python版检测开始 (v2.4.3)")
   logger:trace("=" .. string.rep("=", 60))
 
   local catalog = LrApplication.activeCatalog()

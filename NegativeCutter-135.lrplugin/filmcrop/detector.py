@@ -15,28 +15,22 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None
 
+DNG_TOO_SMALL_MESSAGE = "DNG 解码得到的图像过小，疑似只读到内嵌预览；请安装支持的 RAW 解码器或使用 TIFF/JPEG 中间文件。"
 
 
-def _load_image_array(path: str, contrast_enhance: bool = True) -> np.ndarray:
-    """Load image as grayscale uint8 ndarray, handling 16-bit TIFF.
+class DngDecodeSizeError(ValueError):
+    def __init__(self, diagnostics: dict):
+        super().__init__(DNG_TOO_SMALL_MESSAGE)
+        self.diagnostics = diagnostics
 
-    With ``contrast_enhance=True`` (default), apply a percentile-based
-    contrast stretch (1 % / 99 %) to the grayscale array. Hot pixels and
-    dust spots otherwise compress the dynamic range; stretching the 1–99
-    band to [0, 255] keeps gap peaks / valleys separable from frame
-    content, which is the dominant cue for boundary detection. Percentiles
-    are estimated on a stride-8 subsample for speed (~50 ms vs ~2 s on a
-    200 MP scan); the stretch itself is applied to the full array.
-    """
-    img: Image.Image = Image.open(path)
-    if img.mode in ("I;16", "I;16B", "I;16N", "I"):
-        arr_16 = np.array(img)
-        arr = ((arr_16.astype(np.float32) / 65535.0) * 255).astype(np.uint8)
-    elif img.mode != "L":
-        img = img.convert("L")
-        arr = np.array(img)
-    else:
-        arr = np.array(img)
+
+def _stretch_uint8(arr: np.ndarray, contrast_enhance: bool = True) -> np.ndarray:
+    if arr.dtype != np.uint8:
+        max_val = float(np.max(arr)) if arr.size else 0.0
+        if max_val <= 0:
+            arr = np.zeros(arr.shape, dtype=np.uint8)
+        else:
+            arr = ((arr.astype(np.float32) / max_val) * 255.0).astype(np.uint8)
 
     if contrast_enhance and arr.size > 0 and arr.ndim == 2:
         sub = arr[::8, ::8]
@@ -54,6 +48,178 @@ def _load_image_array(path: str, contrast_enhance: bool = True) -> np.ndarray:
                 ).astype(np.uint8)
 
     return arr
+
+
+def _load_dng_subifd(path: str) -> np.ndarray:
+    """Parse a DNG file and extract the full-resolution RAW data from SubIFD.
+
+    DNG is a TIFF variant.  The main IFD usually contains a small embedded
+    preview; the actual sensor data lives in a SubIFD pointed to by tag 330.
+    This function performs a minimal TIFF IFD walk (no external dependencies)
+    to read that SubIFD as a grayscale uint16 ndarray.
+
+    Raises ``ValueError`` if the file is not a valid DNG or no SubIFD is found.
+    """
+    import struct
+
+    with open(path, "rb") as fh:
+        byte_order = fh.read(2)
+        if byte_order not in (b"II", b"MM"):
+            raise ValueError("Not a valid TIFF/DNG file")
+        endian = "<" if byte_order == b"II" else ">"
+
+        magic = struct.unpack(endian + "H", fh.read(2))[0]
+        if magic != 42:
+            raise ValueError("Not a valid TIFF/DNG file")
+
+        ifd_offset = struct.unpack(endian + "I", fh.read(4))[0]
+
+        # ---- IFD0: find SubIFD pointer (tag 330) ------------------------
+        fh.seek(ifd_offset)
+        num_entries = struct.unpack(endian + "H", fh.read(2))[0]
+        subifd_offset: Optional[int] = None
+        for _ in range(num_entries):
+            tag = struct.unpack(endian + "H", fh.read(2))[0]
+            type_ = struct.unpack(endian + "H", fh.read(2))[0]
+            count = struct.unpack(endian + "I", fh.read(4))[0]
+            value_or_offset = struct.unpack(endian + "I", fh.read(4))[0]
+            if tag == 330:
+                # Type 4 (LONG) with count 1 means the value IS the offset
+                if type_ == 4 and count == 1:
+                    subifd_offset = int(value_or_offset)
+                else:
+                    # Value is an offset to an array of offsets
+                    subifd_offset = int(value_or_offset)
+                break
+
+        if subifd_offset is None:
+            raise ValueError("No SubIFD (tag 330) found in DNG")
+
+        # ---- SubIFD: read essential tags --------------------------------
+        fh.seek(subifd_offset)
+        num_entries2 = struct.unpack(endian + "H", fh.read(2))[0]
+        width = height = strip_offsets = strip_counts = None
+        samples_per_pixel = 1
+        for _ in range(num_entries2):
+            tag = struct.unpack(endian + "H", fh.read(2))[0]
+            type_ = struct.unpack(endian + "H", fh.read(2))[0]
+            count = struct.unpack(endian + "I", fh.read(4))[0]
+            value_or_offset = struct.unpack(endian + "I", fh.read(4))[0]
+            if tag == 256:
+                width = int(value_or_offset)
+            elif tag == 257:
+                height = int(value_or_offset)
+            elif tag == 273:
+                strip_offsets = int(value_or_offset)
+            elif tag == 277:
+                samples_per_pixel = int(value_or_offset)
+            elif tag == 279:
+                strip_counts = int(value_or_offset)
+
+        if not all((width, height, strip_offsets, strip_counts)):
+            raise ValueError("SubIFD missing required image tags")
+
+        # ---- Read strip tables ------------------------------------------
+        fh.seek(strip_offsets)
+        offsets = struct.unpack(endian + "I" * height, fh.read(4 * height))
+        fh.seek(strip_counts)
+        counts = struct.unpack(endian + "I" * height, fh.read(4 * height))
+
+        # ---- Read pixel data --------------------------------------------
+        # Most scanner DNGs are 16-bit RGB; we average channels to grayscale.
+        img_data = np.empty((height, width, samples_per_pixel), dtype=np.uint16)
+        for row in range(height):
+            fh.seek(offsets[row])
+            row_bytes = fh.read(counts[row])
+            row_arr = np.frombuffer(row_bytes, dtype=np.uint16)
+            row_arr = row_arr.reshape((width, samples_per_pixel))
+            img_data[row] = row_arr
+
+        if samples_per_pixel > 1:
+            return img_data.mean(axis=2).astype(np.uint16)
+        return img_data.squeeze().astype(np.uint16)
+
+
+def _load_raw_dng_array(path: str, contrast_enhance: bool = True) -> tuple[np.ndarray, str]:
+    """Load DNG RAW data, trying rawpy → native SubIFD → Pillow fallback."""
+    # 1. rawpy (best quality, widest camera support)
+    try:
+        import rawpy  # type: ignore
+
+        with rawpy.imread(path) as raw:
+            arr = np.array(raw.raw_image_visible)
+        return _stretch_uint8(arr, contrast_enhance), "rawpy"
+    except Exception:
+        pass
+
+    # 2. Native SubIFD parser (pure Python, no external deps)
+    try:
+        arr = _load_dng_subifd(path)
+        return _stretch_uint8(arr, contrast_enhance), "subifd"
+    except Exception:
+        pass
+
+    # 3. Pillow (reads only embedded preview; will be rejected by size gate)
+    return _load_pillow_image_array(path, contrast_enhance), "pillow_fallback"
+
+
+def _load_pillow_image_array(path: str, contrast_enhance: bool = True) -> np.ndarray:
+    """Load image as grayscale uint8 ndarray, handling 16-bit TIFF.
+
+    With ``contrast_enhance=True`` (default), apply a percentile-based
+    contrast stretch (1 % / 99 %) to the grayscale array. Hot pixels and
+    dust spots otherwise compress the dynamic range; stretching the 1–99
+    band to [0, 255] keeps gap peaks / valleys separable from frame
+    content, which is the dominant cue for boundary detection. Percentiles
+    are estimated on a stride-8 subsample for speed (~50 ms vs ~2 s on a
+    200 MP scan); the stretch itself is applied to the full array.
+    """
+    img: Image.Image = Image.open(path)
+    if img.mode in ("I;16", "I;16B", "I;16N", "I"):
+        arr = np.array(img)
+    elif img.mode != "L":
+        img = img.convert("L")
+        arr = np.array(img)
+    else:
+        arr = np.array(img)
+
+    return _stretch_uint8(arr, contrast_enhance)
+
+
+def _load_image_array(path: str, contrast_enhance: bool = True, return_loader: bool = False):
+    if Path(path).suffix.lower() == ".dng":
+        arr, loader = _load_raw_dng_array(path, contrast_enhance)
+    else:
+        arr, loader = _load_pillow_image_array(path, contrast_enhance), "pillow"
+    return (arr, loader) if return_loader else arr
+
+
+def _validate_dng_decode_size(
+    decoded_width: int,
+    decoded_height: int,
+    lr_width: Optional[int] = None,
+    lr_height: Optional[int] = None,
+    loader: str = "unknown",
+) -> None:
+    diagnostics = {
+        "loader": loader,
+        "decodedWidth": int(decoded_width),
+        "decodedHeight": int(decoded_height),
+        "lrWidth": int(lr_width) if lr_width else None,
+        "lrHeight": int(lr_height) if lr_height else None,
+    }
+    long_edge = max(decoded_width, decoded_height)
+    # rawpy 成功时放宽门槛（它给出的是真实 RAW 数据），Pillow fallback 时严格拒绝
+    is_rawpy = loader == "rawpy"
+    min_long_edge = 1000 if is_rawpy else 2000
+    min_ratio = 0.15 if is_rawpy else 0.25
+    if long_edge < min_long_edge:
+        raise DngDecodeSizeError(diagnostics)
+    if lr_width and lr_height:
+        min_width = int(lr_width * min_ratio)
+        min_height = int(lr_height * min_ratio)
+        if decoded_width < min_width or decoded_height < min_height:
+            raise DngDecodeSizeError(diagnostics)
 
 
 def _find_local_peaks(signal, mode="peak"):
@@ -75,7 +241,13 @@ def _find_local_peaks(signal, mode="peak"):
     return peaks
 
 
-def _local_contrast(signal, idx, mode="peak", radius=120):
+def _local_contrast(signal, idx, mode="peak", radius=None):
+    """Score a local peak/valley by blending absolute brightness with prominence.
+
+    ``radius`` defaults to ~8 % of the expected frame step when passed as
+    ``None``; the caller should compute it from ``pstep`` to keep the scoring
+    scale-invariant across different scan resolutions.
+    """
     """Score a local peak/valley by blending absolute brightness with prominence.
 
     Absolute brightness (signal value) is the primary cue for gap detection:
@@ -116,6 +288,9 @@ def find_boundaries(arr, expected_frames, size, mode="valley"):
 
     all_peaks = _find_local_peaks(arr, mode)
 
+    # Scale-invariant radius: ~8 % of per-frame step, clamped to [8, 200]
+    lc_radius = max(8, min(200, int(pstep * 0.08)))
+
     boundaries = [0]
     for f in range(1, expected_frames):
         center = int(f * pstep)
@@ -135,7 +310,7 @@ def find_boundaries(arr, expected_frames, size, mode="valley"):
             sigma = pstep * 0.20
             best_peak = max(
                 candidates,
-                key=lambda p: _local_contrast(arr, p, mode)
+                key=lambda p: _local_contrast(arr, p, mode, radius=lc_radius)
                 * math.exp(-0.5 * ((p - center) / sigma) ** 2),
             )
             boundary_pos = min(best_peak, size - 1)
@@ -175,11 +350,17 @@ def _enforce_boundary_consistency(boundaries, all_peaks, size, expected_frames):
     pitches = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
     median_pitch = float(np.median(pitches))
     peak_set = sorted(all_peaks)  # sorted for deterministic iteration
-    search_range = max(20, int(median_pitch * 0.12))
+    search_range = max(8, int(median_pitch * 0.12))
+    # Only nudge boundaries that are already more than 5 % of the pitch away
+    # from the ideal evenly-spaced position.  Well-placed boundaries are left
+    # untouched so the real gap centre is preserved.
+    adjust_threshold = max(20, median_pitch * 0.05)
     for i in range(1, len(boundaries) - 1):
         prev = boundaries[i - 1]
         ideal = prev + median_pitch
         current = boundaries[i]
+        if abs(current - ideal) <= adjust_threshold:
+            continue
         best = current
         best_dist = abs(current - ideal)
         # Scan local peaks within search_range of the ideal position
@@ -306,7 +487,7 @@ def gap_edges_from_boundaries(arr, boundaries, expected_frames, size, mode="vall
       because it preserves the actual gap width on the side we trust.
     """
     pstep = size / expected_frames
-    search_r = max(200, int(pstep * 0.30))
+    search_r = max(15, int(pstep * 0.30))
     max_gap = int(pstep * 0.10)  # implausibly wide — gap > 10 % of frame step
     min_hw = max(2, int(pstep * 0.002))
     soft_floor = max(min_hw * 2, int(pstep * 0.004))
@@ -468,16 +649,24 @@ def _find_margin_threshold(proj_slice, size, mode):
 
 
 def _find_margin_content_ref(proj_slice, content_ref):
-    """Content-reference method for wide, gentle transitions."""
+    """Find the start of the transition from film-base toward frame content.
+
+    Instead of looking for where the signal has *reached* content_ref
+    (which lands deep inside a gradual transition), we mark the edge at
+    20 % of the way from the image-side reference (edge_ref) toward the
+    content reference.  This catches the beginning of the transition zone
+    and avoids the false-positive "content plateaus" that appear before
+    the real film edge on some scans.
+    """
     if len(proj_slice) < 50:
         return None
-    edge_ref = float(np.mean(proj_slice[:5]))
+    edge_ref = float(np.mean(proj_slice[:10]))
     contrast = abs(edge_ref - content_ref)
     if contrast < 0.03:
         return None
-    tol = contrast * 0.10
+    target = edge_ref - contrast * 0.20
     for i in range(len(proj_slice)):
-        if abs(float(proj_slice[i]) - content_ref) < tol:
+        if float(proj_slice[i]) <= target:
             return i
     return None
 
@@ -582,10 +771,12 @@ def _detect_long_edges_proportional(arr, is_horizontal, chosen_edges, aspect_rat
     if target < 3:
         return None
     if target > size:
-        # Theoretical span wider than image — use full image width
-        return int(0), int(size - 1)
+        # Theoretical frame height exceeds image height — scan likely does not
+        # contain a complete frame in the cross direction.  Fall back to direct
+        # detection instead of blindly returning the image edge.
+        return None
 
-    margin = max(5, int(size * 0.03))
+    margin = max(3, int(size * 0.01))
     end_limit = size - target - margin + 1
     if end_limit <= margin:
         margin = 0
@@ -710,9 +901,12 @@ def _refine_long_edges(
         return prev_long_edges
 
     # 防止 refine 把边界推到图像边缘（可能包含扫描黑边/白边）
-    edge_margin = max(3, int(cross_size * 0.005))
+    edge_margin = max(20, int(cross_size * 0.015))
     if (prev_near >= edge_margin and near < edge_margin) or \
        (prev_far <= cross_size - edge_margin and far > cross_size - edge_margin):
+        return prev_long_edges
+    # 同样禁止 refine 结果本身落在过窄的边缘带内
+    if near < edge_margin or far > cross_size - edge_margin:
         return prev_long_edges
 
     return int(near), int(far)
@@ -821,11 +1015,13 @@ _GAP_REFINE_MAX_SHIFT = 50         # hard cap on how far an edge may move
 
 
 def _tighten_zero_margin(arr, is_horizontal, long_edges, cross_size):
-    """Walk inward from a near-zero film-base margin until image content begins.
+    """Walk inward from the image edges until frame content begins.
 
-    Triple safety: 3σ deviation gate, 3-line hysteresis, and a hard 4% walk
-    cap. Only acts on sides where the current margin is ≤5px. Returns the
-    (possibly tightened) (near, far) tuple.
+    Samples the outermost rows/columns as a film-base baseline and walks
+    toward the image centre until a streak of lines deviates by more than
+    3σ (with a floor of 2.0 DN).  Works for both near-zero margins and
+    wider film-base strips because it always starts from the physical edge
+    rather than from the current crop boundary.
     """
     near, far = long_edges
     walk_max = max(8, int(cross_size * _ZERO_MARGIN_WALK_FRAC))
@@ -841,38 +1037,51 @@ def _tighten_zero_margin(arr, is_horizontal, long_edges, cross_size):
                 return 0.0
             return float(arr[:, idx].mean())
 
-    def _walk(start: int, direction: int) -> int:
-        # Sample film-base from the outermost rows/columns on this side.
-        if direction == 1:
-            base_indices = [max(0, start + i) for i in range(sample)]
-        else:
-            base_indices = [max(0, start - i) for i in range(sample)]
+    def _walk_from_edge(edge: int, direction: int, current_edge: int) -> int:
+        # Sample pure film-base from the outermost rows/columns.
+        if direction == 1:  # inward from the top/left edge
+            base_indices = list(range(sample))
+        else:  # inward from the bottom/right edge
+            base_indices = list(range(cross_size - sample, cross_size))
         base_means = np.array([_line_mean(i) for i in base_indices], dtype=np.float32)
         base_mean = float(base_means.mean())
         base_std = float(base_means.std())
-        threshold = max(_ZERO_MARGIN_SIGMA * base_std, 1.5)
+        threshold = max(_ZERO_MARGIN_SIGMA * base_std, 2.0)
         out_streak = 0
-        last_in = start
+        result = current_edge
+        found = False
         for step in range(sample, walk_max):
-            idx = start + step * direction
+            idx = edge + step * direction
             if idx < 0 or idx >= cross_size:
                 break
             m = _line_mean(idx)
-            if abs(m - base_mean) > threshold:
+            diff = abs(m - base_mean)
+            is_out = diff > threshold
+            if is_out:
                 out_streak += 1
                 if out_streak >= _ZERO_MARGIN_HYSTERESIS:
-                    # Step back to the first out-of-distribution line.
-                    return idx - (out_streak - 1) * direction
+                    result = idx - (out_streak - 1) * direction
+                    found = True
+                    break
             else:
                 out_streak = 0
-                last_in = idx
-        return last_in
+        if not found:
+            return current_edge
+        return result
 
-    new_near, new_far = near, far
-    if near <= _ZERO_MARGIN_THRESHOLD:
-        new_near = max(near, _walk(near, 1))
-    if (cross_size - far) <= _ZERO_MARGIN_THRESHOLD:
-        new_far = min(far, _walk(far, -1))
+    new_near = _walk_from_edge(0, 1, near)
+    new_far = _walk_from_edge(cross_size - 1, -1, far)
+
+    # The walk finds the film-base / content transition from the physical
+    # edge.  It must ONLY tighten the crop — never expand it toward the
+    # edge, because the walk can be fooled by film-base brightness bumps
+    # or scan artefacts that look like a transition but are still inside
+    # the margin.  Cap the move at 5 % of the cross dimension.
+    max_shift = max(20, int(cross_size * 0.05))
+    if new_near < near or abs(new_near - near) > max_shift:
+        new_near = near
+    if new_far > far or abs(new_far - far) > max_shift:
+        new_far = far
 
     if new_near >= new_far:
         return long_edges
@@ -1213,21 +1422,31 @@ def _validate_gap_shape(proj, boundaries, mode="peak", check_radius=40):
         return 0.0
     scores = []
     for b in boundaries[1:-1]:
-        s0 = max(0, b - check_radius)
-        s1 = min(len(proj), b + check_radius)
-        local = proj[s0:s1]
-        if len(local) < 5:
+        # Centre: small window around the boundary (the gap itself)
+        centre = proj[max(0, b - 5):min(len(proj), b + 6)]
+        if len(centre) < 3:
             continue
-        mid = len(local) // 2
-        left_mean = float(np.mean(local[:mid]))
-        right_mean = float(np.mean(local[mid:]))
-        centre_mean = float(np.mean(local[mid - 3:mid + 3]))
+        centre_mean = float(np.mean(centre))
+
+        # Frame content: windows well away from the gap so they are
+        # guaranteed to be frame interior, not gap edge.
+        left_region = proj[max(0, b - 200):max(0, b - 50)]
+        right_region = proj[min(len(proj), b + 50):min(len(proj), b + 200)]
+
+        frame_means = []
+        if len(left_region) > 0:
+            frame_means.append(float(np.mean(left_region)))
+        if len(right_region) > 0:
+            frame_means.append(float(np.mean(right_region)))
+
+        if not frame_means:
+            continue
+
+        frame_mean = float(np.mean(frame_means))
         if mode == "peak":
-            # Centre should be brighter than both sides
-            scores.append(centre_mean - max(left_mean, right_mean))
+            scores.append(centre_mean - frame_mean)
         else:
-            # Centre should be darker than both sides
-            scores.append(min(left_mean, right_mean) - centre_mean)
+            scores.append(frame_mean - centre_mean)
     return float(np.mean(scores)) if scores else 0.0
 
 
@@ -1272,7 +1491,7 @@ def _compute_frame_width_cv(edges, scan_size):
 
 
 _KNOWN_FORMAT_RATIOS = (1.0, 7 / 6, 5 / 4, 3 / 2)
-_AUTO_ASPECT_SNAP_TOLERANCE = 0.08
+_AUTO_ASPECT_SNAP_TOLERANCE = 0.12
 
 
 def _auto_aspect_ratio(chosen_edges, long_edges, scan_size, cross_size):
@@ -1314,6 +1533,35 @@ def _auto_aspect_ratio(chosen_edges, long_edges, scan_size, cross_size):
     return raw_ratio, raw_ratio
 
 
+def _gap_quality_score(proj, gap_edges, mode="peak"):
+    """Score how real each gap looks compared to adjacent frame content.
+
+    For peak mode (negative film) gaps should be brighter than frames.
+    For valley mode (positive film) gaps should be darker.  Returns the
+    mean relative brightness difference; negative values mean the gaps
+    look like frame content rather than real gaps.
+    """
+    if not gap_edges:
+        return 0.0
+    scores = []
+    for le, re in gap_edges:
+        if re <= le:
+            scores.append(-1.0)
+            continue
+        gap_mean = float(np.mean(proj[le:re]))
+        left_mean = float(np.mean(proj[max(0, le - 200):le]))
+        right_mean = float(np.mean(proj[re:min(len(proj), re + 200)]))
+        frame_mean = (left_mean + right_mean) / 2.0
+        if frame_mean <= 0:
+            scores.append(0.0)
+            continue
+        rel = (gap_mean - frame_mean) / frame_mean
+        if mode == "valley":
+            rel = -rel
+        scores.append(rel)
+    return float(np.mean(scores)) if scores else 0.0
+
+
 def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
     """Auto-detect best frame count (2..max_frames)."""
     best_frames = 6
@@ -1325,18 +1573,46 @@ def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
         peak_shape = _validate_gap_shape(smoothed, [0] + [(le + re) // 2 for le, re in pe] + [scan_size], "peak")
         valley_shape = _validate_gap_shape(smoothed, [0] + [(le + re) // 2 for le, re in ve] + [scan_size], "valley")
         if peak_shape > 0 and valley_shape <= 0:
-            chosen_edges, chosen_var = pe, pv
+            chosen_edges, chosen_var, chosen_mode = pe, pv, "peak"
         elif valley_shape > 0 and peak_shape <= 0:
-            chosen_edges, chosen_var = ve, vv
+            chosen_edges, chosen_var, chosen_mode = ve, vv, "valley"
         elif pv < vv:
-            chosen_edges, chosen_var = pe, pv
+            chosen_edges, chosen_var, chosen_mode = pe, pv, "peak"
         else:
-            chosen_edges, chosen_var = ve, vv
+            chosen_edges, chosen_var, chosen_mode = ve, vv, "valley"
         fallback_count = sum(1 for le, re in chosen_edges if le == re)
         cv = _compute_frame_width_cv(chosen_edges, scan_size)
         cv_penalty = max(0.0, cv - 0.10) * 2.0
         fallback_penalty = fallback_count * 1.5
-        score = chosen_var * (1.0 + cv_penalty + fallback_penalty)
+        # Penalise configurations where the detected gaps don't look like
+        # real film-base gaps (too similar in brightness to frame content).
+        gap_qualities = []
+        for le, re in chosen_edges:
+            if re <= le:
+                gap_qualities.append(-1.0)
+                continue
+            gap_mean = float(np.mean(smoothed[le:re]))
+            left_mean = float(np.mean(smoothed[max(0, le - 200):le]))
+            right_mean = float(np.mean(smoothed[re:min(len(smoothed), re + 200)]))
+            frame_mean = (left_mean + right_mean) / 2.0
+            if frame_mean <= 0:
+                gap_qualities.append(0.0)
+                continue
+            rel = (gap_mean - frame_mean) / frame_mean
+            if chosen_mode == "valley":
+                rel = -rel
+            gap_qualities.append(rel)
+
+        mean_quality = float(np.mean(gap_qualities)) if gap_qualities else 0.0
+        min_quality = float(np.min(gap_qualities)) if gap_qualities else 0.0
+        # Mean quality penalises weak gaps overall; min quality catches
+        # fake gaps that are hidden by averaging with a few real ones.
+        quality_penalty = max(0.0, 0.15 - mean_quality) * 5.0
+        min_quality_penalty = max(0.0, 0.20 - min_quality) * 3.0
+        # Very narrow gaps are usually detection artefacts, not real sprocket holes.
+        min_gap_width = max(15, int(scan_size / ef * 0.003))
+        narrow_penalty = sum(1 for le, re in chosen_edges if re - le < min_gap_width) * 1.5
+        score = chosen_var * (1.0 + cv_penalty + fallback_penalty + quality_penalty + min_quality_penalty + narrow_penalty)
         if score < best_score:
             best_score = score
             best_frames = ef
@@ -1802,7 +2078,15 @@ def analyze_image_120(
     }
 
 
-def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: float = 0.5, original_path: Optional[str] = None, aspect_ratio: Optional[float] = 3 / 2) -> dict:
+def analyze_image(
+    image_path: str,
+    expected_frames: int = 6,
+    cleanup_scale: float = 0.5,
+    original_path: Optional[str] = None,
+    aspect_ratio: Optional[float] = 3 / 2,
+    lr_width: Optional[int] = None,
+    lr_height: Optional[int] = None,
+) -> dict:
     """
     Analyse a scanned film strip and detect frame boundaries.
 
@@ -1830,7 +2114,7 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     """
     t0 = time.time()
 
-    arr = _load_image_array(image_path)
+    arr, input_loader = _load_image_array(image_path, return_loader=True)
     thumb_h, thumb_w = arr.shape
     is_horizontal = thumb_w >= thumb_h
 
@@ -1847,13 +2131,21 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
     cross_size = thumb_h if is_horizontal else thumb_w
     orig_arr = arr
     orig_h, orig_w = thumb_h, thumb_w
+    orig_loader = input_loader
 
     if original_path:
         try:
-            orig_arr = _load_image_array(original_path)
+            orig_arr, orig_loader = _load_image_array(original_path, return_loader=True)
             orig_h, orig_w = orig_arr.shape
         except Exception:
             pass
+
+    # Validate DNG decode size for image_path when no original is provided
+    if not original_path and Path(image_path).suffix.lower() == ".dng":
+        _validate_dng_decode_size(thumb_w, thumb_h, lr_width, lr_height, input_loader)
+
+    if original_path and Path(original_path).suffix.lower() == ".dng":
+        _validate_dng_decode_size(orig_w, orig_h, lr_width, lr_height, orig_loader)
 
     # Scale factors for converting original coordinates back to thumbnail
     scale_h = thumb_h / orig_h
@@ -1931,10 +2223,19 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         orig_span = orig_long_edges[1] - orig_long_edges[0]
         min_reasonable = max(20, int(orig_cross_size * 0.05))
 
+        # Edge-bleed guard: if the proportional window is pushed against the
+        # image boundary, it has likely drifted into the film-base margin.
+        # Fall back to direct detection rather than adopting a boundary that
+        # will trigger zero-margin tightening and produce visible bleed.
+        edge_buffer = max(3, int(orig_cross_size * 0.005))
+        touches_edge = (
+            prop_near <= edge_buffer or prop_far >= orig_cross_size - edge_buffer
+        )
+
         # Prefer the proportional result (gap-driven, more reliable) whenever
         # it produces a reasonable span — unless it would aggressively crop
         # valid content that the direct detector saw.
-        if prop_span >= min_reasonable:
+        if not touches_edge and prop_span >= min_reasonable:
             if orig_long_edges == (0, orig_cross_size):
                 # Direct detection failed entirely — use proportional
                 orig_long_edges = orig_proportional
@@ -1942,7 +2243,7 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                 # Proportional agrees with direct (within 8 %) — use the
                 # gap-driven result for precision
                 orig_long_edges = orig_proportional
-        elif orig_long_edges == (0, orig_cross_size) and prop_span > 0:
+        elif not touches_edge and orig_long_edges == (0, orig_cross_size) and prop_span > 0:
             # Last resort: even a short proportional result beats nothing
             orig_long_edges = orig_proportional
 
@@ -1980,15 +2281,13 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                 orig_long_edges = (right_margin, orig_cross_size - right_margin)
             # Both-high / both-low / mixed: keep the asymmetric edges as-is.
 
-    # Zero-margin tightening: when the film runs flush to one side of the
-    # scan, the long-edge detector returns the bare image edge, leaving 1-2px
-    # of black film border in the crop. Walk inward content-aware until we
-    # cross a 3σ deviation streak.
-    if (orig_long_edges[0] <= _ZERO_MARGIN_THRESHOLD or
-            orig_cross_size - orig_long_edges[1] <= _ZERO_MARGIN_THRESHOLD):
-        orig_long_edges = _tighten_zero_margin(
-            orig_arr, is_horizontal, orig_long_edges, orig_cross_size
-        )
+    # Zero-margin tightening: walk inward from the physical image edges to
+    # locate the film-base / content transition.  This runs for every scan
+    # because it is now content-aware: if a side lacks a clear film-base
+    # strip, the walk safely returns the current edge unchanged.
+    orig_long_edges = _tighten_zero_margin(
+        orig_arr, is_horizontal, orig_long_edges, orig_cross_size
+    )
 
     # Plateau-refinement: the initial plateau-walk places gap edges at 15 %
     # of the transition from plateau toward content.  This leaves most of the
@@ -1999,9 +2298,26 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         orig_long_edges, orig_cross_size, chosen_mode
     )
 
+    # Safety margin for cross-direction edges: the automatic walk often stops
+    # at the very first row/column that deviates from film-base, but that row
+    # can still carry a visible film-base tint.  Nudge inward a small fixed
+    # distance to guarantee a clean content edge.
+    _CROSS_SAFETY = max(12, int(orig_cross_size * 0.005))
+    orig_long_edges = (
+        min(orig_long_edges[0] + _CROSS_SAFETY, orig_cross_size - 1),
+        max(orig_long_edges[1] - _CROSS_SAFETY, 1),
+    )
+
     # Scan-edge detection on original image projection (use unsmoothed for sharper edges)
     first_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=False)
     last_offset_raw = _detect_scan_edge(orig_projection, chosen_mode, expected_frames, from_end=True)
+
+    # Scan-direction safety margin: same reason as cross-direction.
+    _SCAN_SAFETY = max(30, int(orig_scan_size * 0.001))
+    if first_offset_raw is not None:
+        first_offset_raw = min(first_offset_raw + _SCAN_SAFETY, orig_scan_size - 1)
+    if last_offset_raw is not None:
+        last_offset_raw = max(last_offset_raw - _SCAN_SAFETY, 1)
 
     # ------------------------------------------------------------------
     # Scale all original coordinates back to thumbnail space
@@ -2100,17 +2416,17 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
             unified_cross_dim = orig_cross_size
             unified_scan_dim = int(round(unified_cross_dim * aspect_ratio))
 
-        # Recenter long edges to exact unified cross-dimension
-        curr_near, curr_far = orig_long_edges
-        center = (curr_near + curr_far) // 2
-        new_near = max(0, center - unified_cross_dim // 2)
-        new_far = min(orig_cross_size, new_near + unified_cross_dim)
-        if new_far > orig_cross_size:
-            new_far = orig_cross_size
-            new_near = max(0, new_far - unified_cross_dim)
-        orig_long_edges = (new_near, new_far)
+        # Middle frames are full 135 frames — enforce strict 3:2 ratio.
+        # Use the detected cross-direction span (already tightened to the
+        # film-base / content boundary) as the fixed edge, then derive the
+        # exact scan dimension from it: scan = cross * aspect_ratio.  This
+        # shrinks the crop inward when the detected ratio is slightly wider
+        # than 3:2, which eliminates the residual film-base bleed that a
+        # pure outward expansion would reintroduce.
+        cross_span = orig_long_edges[1] - orig_long_edges[0]
+        strict_scan_dim = int(round(cross_span * aspect_ratio))
 
-        # Rebuild MIDDLE frames with unified dimensions
+        # Rebuild MIDDLE frames with strict 3:2 dimensions
         for i, fr in enumerate(frames):
             is_middle = (0 < i < n)
             if not is_middle:
@@ -2162,21 +2478,14 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                     orig_chosen_edges[i][0] if i < n else orig_w
                 )
                 center_scan = (left_b + right_b) // 2
-                new_left = max(0, center_scan - unified_scan_dim // 2)
-                new_right = min(orig_w, new_left + unified_scan_dim)
+                new_left = max(0, center_scan - strict_scan_dim // 2)
+                new_right = min(orig_w, new_left + strict_scan_dim)
                 if new_right > orig_w:
                     new_right = orig_w
-                    new_left = max(0, new_right - unified_scan_dim)
+                    new_left = max(0, new_right - strict_scan_dim)
 
                 # --- Hard-clamp protection: never cross the gap centre into a
-                # neighbouring middle frame.  When the median-forced span is
-                # wider than the natural extent the recentre step can push
-                # ``new_left`` / ``new_right`` past the adjacent gap, producing
-                # frame overlap.  Clamping to the gap centre splits each gap
-                # symmetrically between the two frames it separates and
-                # guarantees mutual exclusivity.  3:2 still holds for frames
-                # that fit; clamped frames trade a small slice of scan-dim
-                # (and therefore aspect ratio) for non-overlap.
+                # neighbouring middle frame.
                 prev_gap_center = (orig_chosen_edges[i - 1][0] + orig_chosen_edges[i - 1][1]) // 2
                 next_gap_center = (orig_chosen_edges[i][0] + orig_chosen_edges[i][1]) // 2
                 if new_left < prev_gap_center:
@@ -2201,11 +2510,11 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
                     orig_chosen_edges[i][0] if i < n else orig_h
                 )
                 center_scan = (top_b + bottom_b) // 2
-                new_top = max(0, center_scan - unified_scan_dim // 2)
-                new_bottom = min(orig_h, new_top + unified_scan_dim)
+                new_top = max(0, center_scan - strict_scan_dim // 2)
+                new_bottom = min(orig_h, new_top + strict_scan_dim)
                 if new_bottom > orig_h:
                     new_bottom = orig_h
-                    new_top = max(0, new_bottom - unified_scan_dim)
+                    new_top = max(0, new_bottom - strict_scan_dim)
 
                 # Hard-clamp protection (see horizontal branch above).
                 prev_gap_center = (orig_chosen_edges[i - 1][0] + orig_chosen_edges[i - 1][1]) // 2
@@ -2245,6 +2554,16 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         for fr in frames
     )
 
+    # Coordinate sanity: reject frames that would invert after INSET in Lightroom
+    for fr in frames:
+        if fr.get("relativeLeft", 0) >= fr.get("relativeRight", 1):
+            needs_review = True
+        if fr.get("relativeTop", 0) >= fr.get("relativeBottom", 1):
+            needs_review = True
+        scan_dim = (fr.get("right", 0) - fr.get("left", 0)) if is_horizontal else (fr.get("bottom", 0) - fr.get("top", 0))
+        if scan_dim <= 0:
+            needs_review = True
+
     elapsed = time.time() - t0
 
     debug_info = {
@@ -2252,6 +2571,11 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         "imageWidth": thumb_w,
         "isHorizontal": is_horizontal,
         "usedOriginalForLongEdge": original_path is not None,
+        "loader": orig_loader,
+        "decodedWidth": orig_w,
+        "decodedHeight": orig_h,
+        "lrWidth": lr_width,
+        "lrHeight": lr_height,
         "gapEdges": chosen_edges,
         "longEdges": long_edges,
         "prevLongEdges": prev_long_edges,
@@ -2270,6 +2594,14 @@ def analyze_image(image_path: str, expected_frames: int = 6, cleanup_scale: floa
         "near_diag": near_long_diag,
         "far_diag": far_long_diag,
     }
+
+    # ---- needsReview fuse: never return suspicious coordinates to Lightroom ----
+    if needs_review:
+        return {
+            "error": "检测结果可疑：帧边界置信度过低或坐标异常。可能原因：分辨率过低、扫描方向与预期不符、胶片格式选择错误。建议导出为 TIFF/JPEG 后重试，或手动指定胶片格式。",
+            "needsReview": True,
+            "debug": debug_info,
+        }
 
     return {
         "frameCount": len(frames),
@@ -2292,11 +2624,20 @@ if __name__ == "__main__":
     parser.add_argument("--frames", type=int, default=6, help="Expected number of frames (0=auto)")
     parser.add_argument("--cleanup-scale", type=float, default=0.5, help="Gap cleanup scale factor")
     parser.add_argument("--original", type=str, default=None, help="Path to original full-res image")
+    parser.add_argument("--lr-width", type=int, default=None, help="Lightroom source width")
+    parser.add_argument("--lr-height", type=int, default=None, help="Lightroom source height")
     args = parser.parse_args()
 
     if not Path(args.image_path).exists():
         print(json.dumps({"error": f"file not found: {args.image_path}"}), file=sys.stderr)
         sys.exit(1)
 
-    result = analyze_image(args.image_path, args.frames, args.cleanup_scale, args.original)
+    result = analyze_image(
+        args.image_path,
+        args.frames,
+        args.cleanup_scale,
+        args.original,
+        lr_width=args.lr_width,
+        lr_height=args.lr_height,
+    )
     print(json.dumps(result, indent=2, ensure_ascii=False))

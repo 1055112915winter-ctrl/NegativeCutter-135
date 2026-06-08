@@ -22,7 +22,7 @@ except ImportError:
 _request_count: int = 0
 _server_instance: Any = None
 
-app = FastAPI(title="FilmCrop API", version="2.4.1")
+app = FastAPI(title="FilmCrop API", version="2.4.3")
 
 if HAS_FASTAPI:
     app.add_middleware(
@@ -40,6 +40,8 @@ class AnalyzeRequest(BaseModel):
     original_path: Optional[str] = None
     aspect_ratio: Optional[float] = None
     format_hint: Optional[str] = None
+    lr_width: Optional[int] = None
+    lr_height: Optional[int] = None
 
 
 _FORMAT_RATIOS = {
@@ -102,11 +104,17 @@ def analyze(req: AnalyzeRequest):
             cleanup_scale=req.cleanup_scale,
             original_path=req.original_path,
             aspect_ratio=_resolve_aspect_ratio(req),
+            lr_width=req.lr_width,
+            lr_height=req.lr_height,
         )
         return result
     except Exception as e:
         import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
+        result = {"error": str(e), "traceback": traceback.format_exc()}
+        diagnostics = getattr(e, "diagnostics", None)
+        if isinstance(diagnostics, dict):
+            result.update(diagnostics)
+        return result
 
 
 @app.post("/crop")

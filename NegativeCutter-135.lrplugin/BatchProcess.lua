@@ -27,7 +27,7 @@ end
 -- 批量处理主函数
 LrTasks.startAsyncTask(function()
   logger:trace("=" .. string.rep("=", 60))
-  logger:trace("NegativeCutter 批量处理开始 (v2.4.1)")
+  logger:trace("NegativeCutter 批量处理开始 (v2.4.3)")
   logger:trace("=" .. string.rep("=", 60))
 
   local catalog = LrApplication.activeCatalog()

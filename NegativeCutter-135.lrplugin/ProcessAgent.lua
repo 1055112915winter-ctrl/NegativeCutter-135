@@ -79,6 +79,12 @@ function ProcessAgent.parseJSON(jsonStr)
     cropAngle    = tonumber(raw.cropAngle) or 0.0,
     error        = raw.error,
     _diag        = raw._diag,
+    debug        = raw.debug,
+    loader       = raw.loader,
+    decodedWidth = tonumber(raw.decodedWidth),
+    decodedHeight = tonumber(raw.decodedHeight),
+    lrWidth      = tonumber(raw.lrWidth),
+    lrHeight     = tonumber(raw.lrHeight),
   }
 
   if type(raw.debug) == "table" and type(raw.debug.isHorizontal) == "boolean" then
@@ -120,19 +126,24 @@ end
 -- ------------------------------------------------------------------
 -- analyzeWithPython — 调用 detect_thumb.py 并返回解析结果
 -- ------------------------------------------------------------------
-function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath, formatHint)
+function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath, formatHint, lrWidth, lrHeight)
   -- 确保工作目录存在（可能被独立调用，ThumbnailAgent 尚未初始化）
   if not LrFileUtils.exists(WORK_DIR) then
     LrFileUtils.createAllDirectories(WORK_DIR)
   end
 
+  -- 优先使用 Python 3 直接运行 detect_thumb.py（开发版本，支持最新特性如 SubIFD）
+  local pyPath = ProcessAgent.findPythonPath()
+  local scriptPath = LrPathUtils.child(pluginPath, "detect_thumb.py")
+  local usePython = LrFileUtils.exists(scriptPath)
   local exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
+  local useExe = LrFileUtils.exists(exePath)
 
-  if not LrFileUtils.exists(exePath) then
-    return nil, "检测引擎不存在: " .. exePath
+  if not usePython and not useExe then
+    return nil, "检测引擎不存在: 未找到 Python 3 也未找到 NegativeCutter 可执行文件"
   end
 
-  -- 优先使用缩略图；若缩略图不可用且原图存在，则 fallback 到原图直接检测
+  -- 优先使用缩略图；若缩略图不可用，尝试原图
   local inputPath = thumbPath
   if not LrFileUtils.exists(thumbPath) then
     if originalPath and LrFileUtils.exists(originalPath) then
@@ -143,8 +154,18 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     end
   end
 
-  local cmd = string.format('"%s" "%s" --frames %d --cleanup-scale 0.50',
-    exePath, inputPath, expectedFrames)
+  local cmd
+  if usePython then
+    -- 使用 Python 3 直接运行（优先，便于快速迭代）
+    cmd = string.format('"%s" "%s" "%s" --frames %d --cleanup-scale 0.50',
+      pyPath, scriptPath, inputPath, expectedFrames)
+    logger:trace("使用 Python 3 直接运行 detect_thumb.py: " .. pyPath)
+  else
+    -- fallback 到 PyInstaller 打包的可执行文件
+    cmd = string.format('"%s" "%s" --frames %d --cleanup-scale 0.50',
+      exePath, inputPath, expectedFrames)
+    logger:trace("使用打包的可执行文件: " .. exePath)
+  end
 
   if originalPath and LrFileUtils.exists(originalPath) then
     cmd = cmd .. ' --original "' .. originalPath .. '"'
@@ -152,6 +173,10 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
 
   if formatHint and formatHint ~= "" then
     cmd = cmd .. ' --format "' .. formatHint .. '"'
+  end
+
+  if lrWidth and lrHeight then
+    cmd = cmd .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
   end
 
   local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
@@ -182,7 +207,18 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
 
   local result = ProcessAgent.parseJSON(output)
   if not result then return nil, "无法解析JSON输出" end
-  if result.error then return nil, "Python错误: " .. result.error end
+  if result.error then
+    local detail = result.error
+    if result.loader or result.decodedWidth then
+      detail = detail .. string.format(" (loader=%s, decoded=%sx%s, lr=%sx%s)",
+        tostring(result.loader or "?"),
+        tostring(result.decodedWidth or "?"),
+        tostring(result.decodedHeight or "?"),
+        tostring(result.lrWidth or "?"),
+        tostring(result.lrHeight or "?"))
+    end
+    return nil, detail
+  end
   if not result.frames or #result.frames == 0 then return nil, "未检测到帧" end
 
   -- Log diagnostic info if available
@@ -191,6 +227,21 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
       result._diag.pythonExecutable or "?",
       result._diag.pythonVersion or "?",
       result._diag.detectorMtime or "?"))
+  end
+  if result.debug then
+    logger:trace(string.format("DNG诊断: loader=%s, decoded=%sx%s, lr=%sx%s",
+      tostring(result.debug.loader or result.loader or "?"),
+      tostring(result.debug.decodedWidth or result.decodedWidth or "?"),
+      tostring(result.debug.decodedHeight or result.decodedHeight or "?"),
+      tostring(result.debug.lrWidth or result.lrWidth or "?"),
+      tostring(result.debug.lrHeight or result.lrHeight or "?")))
+  elseif result.loader or result.decodedWidth or result.lrWidth then
+    logger:trace(string.format("DNG诊断: loader=%s, decoded=%sx%s, lr=%sx%s",
+      tostring(result.loader or "?"),
+      tostring(result.decodedWidth or "?"),
+      tostring(result.decodedHeight or "?"),
+      tostring(result.lrWidth or "?"),
+      tostring(result.lrHeight or "?")))
   end
 
   return result, nil
@@ -285,10 +336,11 @@ end
 -- ------------------------------------------------------------------
 -- extractThumbnail — 获取缩略图（带等待）
 -- ------------------------------------------------------------------
-function ProcessAgent.extractThumbnail(photo)
+function ProcessAgent.extractThumbnail(photo, maxWidth)
+  maxWidth = maxWidth or 2048
   local thumbSuccess, thumbPath, thumbError = nil, nil, nil
 
-  ThumbnailAgent.extract(photo, 8192, function(success, path, err)
+  ThumbnailAgent.extract(photo, maxWidth, function(success, path, err)
     thumbSuccess = success
     thumbPath = path
     thumbError = err
@@ -322,7 +374,11 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
 
   -- 步骤2: Python 分析（缩略图失败时 fallback 到原图）
   local originalPath = photo:getRawMetadata("path")
-  local result, analyzeError = ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath, formatHint)
+  local photoDimensions = photo:getRawMetadata("dimensions")
+  local lrWidth = photoDimensions and photoDimensions.width or nil
+  local lrHeight = photoDimensions and photoDimensions.height or nil
+  local result, analyzeError = ProcessAgent.analyzeWithPython(
+    thumbPath, expectedFrames, originalPath, formatHint, lrWidth, lrHeight)
   if not result then
     return 0, "分析失败 - " .. (analyzeError or "未知")
   end

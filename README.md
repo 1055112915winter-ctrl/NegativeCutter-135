@@ -15,6 +15,9 @@
 - **精确裁剪**：基于图像分析生成像素级精确的裁剪框
 - **边界清理**：0.3% 微小内收，消除扫描脏边和bleed
 - **开箱即用**：内置检测引擎，无需安装 Python 或 pip
+- **SubIFD DNG 解码**：直接解析 DNG RAW 像素，无需 rawpy
+- **严格 3:2 比例**：middle frames 自动锁定精确比例
+- **边缘白边消除**：收紧-only 约束 + 安全边距
 - **赞助支持**：内置赞赏码入口，支持插件持续开发
 - **问题反馈**：一键提交使用反馈
 
@@ -30,7 +33,7 @@
 
 ### 一键安装（推荐）
 
-1. 从 [Releases](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases) 下载最新版 `NegativeCutter-135-v2.4.1.zip`
+1. 从 [Releases](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases) 下载最新版 `NegativeCutter-135-v2.4.3.zip`
 2. 解压 ZIP 文件
 3. 双击运行 `install.sh`
 4. 脚本会自动检测 Lightroom 插件目录并安装

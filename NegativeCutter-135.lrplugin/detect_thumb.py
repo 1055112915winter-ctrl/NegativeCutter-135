@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FilmCrop 缩略图分析 - 兼容 CLI 入口
-版本: v2.4.1 - 核心算法已提取到 filmcrop 包
+版本: v2.4.3 - 核心算法已提取到 filmcrop 包
 
 向后兼容原有命令行接口：
     python3 detect_thumb.py <thumb_path> [--frames N] [--cleanup-scale X.X] [--original <path>]
@@ -81,6 +81,8 @@ def main():
     cleanup_scale = 0.5
     original_path = None
     format_hint = None
+    lr_width = None
+    lr_height = None
 
     _FORMAT_MAP = {
         "35mm": 3 / 2, "645": 4 / 3, "6x6": 1.0, "6x7": 7 / 6,
@@ -102,6 +104,12 @@ def main():
         elif arg == "--format" and i + 1 < len(sys.argv):
             format_hint = sys.argv[i + 1]
             i += 2
+        elif arg == "--lr-width" and i + 1 < len(sys.argv):
+            lr_width = int(sys.argv[i + 1])
+            i += 2
+        elif arg == "--lr-height" and i + 1 < len(sys.argv):
+            lr_height = int(sys.argv[i + 1])
+            i += 2
         else:
             i += 1
 
@@ -114,7 +122,15 @@ def main():
 
     try:
         _log(f"analyze_image start: thumb={thumb_path}, frames={expected_frames}, original={original_path}")
-        result = analyze_image(thumb_path, expected_frames, cleanup_scale, original_path, aspect_ratio=format_ratio)
+        result = analyze_image(
+            thumb_path,
+            expected_frames,
+            cleanup_scale,
+            original_path,
+            aspect_ratio=format_ratio,
+            lr_width=lr_width,
+            lr_height=lr_height,
+        )
         _log(f"analyze_image OK: frameCount={result.get('frameCount')}")
         # Inject diagnostic info so Lightroom (or CLI) can verify which code ran
         result["_diag"] = {
@@ -133,6 +149,9 @@ def main():
         tb = traceback.format_exc()
         _log(f"analyze_image FAILED: {e}\n{tb}")
         result = {"error": str(e), "traceback": tb}
+        diagnostics = getattr(e, "diagnostics", None)
+        if isinstance(diagnostics, dict):
+            result.update(diagnostics)
         print(json.dumps(result, separators=(",", ":")))
         sys.exit(1)
 
