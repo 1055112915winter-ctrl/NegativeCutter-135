@@ -421,7 +421,7 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
   local filmType = prefs.filmType or "negative"
   CropCleaner.cleanFrames(frames, result.sourceWidth, result.sourceHeight, filmType)
 
-  for _, frame in ipairs(frames) do
+  for frameIdx, frame in ipairs(frames) do
     catalog:setSelectedPhotos(photo, {photo})
     LrTasks.sleep(0.1)
 
@@ -463,10 +463,13 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
         end
       end
 
-      pcall(function()
-        local copyName = string.format("%s_帧%02d", baseName, frameIdx)
+      local copyName = string.format("%s_帧%02d", baseName, frameIdx)
+      local ok, renameErr = pcall(function()
         virtualCopy:setRawMetadata('copyName', copyName)
       end)
+      if not ok then
+        logger:trace("虚拟副本重命名失败: " + tostring(renameErr))
+      end
 
       createdCount = createdCount + 1
       LrTasks.sleep(0.2)

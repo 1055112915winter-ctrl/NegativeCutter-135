@@ -59,6 +59,18 @@ function CropCleaner.cleanFrames(frames, sourceWidth, sourceHeight, filmType)
     frame.relativeBottom = math.max(0.0, (frame.relativeBottom or 1.0) - inset)
     frame.relativeLeft = math.min(1.0, (frame.relativeLeft or 0.0) + inset)
     frame.relativeRight = math.max(0.0, (frame.relativeRight or 1.0) - inset)
+
+    -- 防止内收过度导致坐标反转，保持至少 1% 的有效区域
+    if frame.relativeTop >= frame.relativeBottom then
+      local mid = (frame.relativeTop + frame.relativeBottom) / 2
+      frame.relativeTop = math.max(0.0, mid - 0.005)
+      frame.relativeBottom = math.min(1.0, mid + 0.005)
+    end
+    if frame.relativeLeft >= frame.relativeRight then
+      local mid = (frame.relativeLeft + frame.relativeRight) / 2
+      frame.relativeLeft = math.max(0.0, mid - 0.005)
+      frame.relativeRight = math.min(1.0, mid + 0.005)
+    end
   end
 
   return frames
