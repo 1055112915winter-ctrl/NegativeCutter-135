@@ -33,7 +33,11 @@ return {
     end
 
     local detectorScript = LrPathUtils.child(_PLUGIN.path, 'detect_thumb.py')
-    local bundledExe = LrPathUtils.child(_PLUGIN.path, 'NegativeCutter')
+    local bundledExeDir = LrPathUtils.child(_PLUGIN.path, 'NegativeCutter')
+    local bundledExe = LrPathUtils.child(bundledExeDir, 'NegativeCutter')
+    if not fileExists(bundledExe) then
+      bundledExe = LrPathUtils.child(_PLUGIN.path, 'NegativeCutter')
+    end
     local hasScript = fileExists(detectorScript)
     local hasExe = fileExists(bundledExe)
     local scriptStatus

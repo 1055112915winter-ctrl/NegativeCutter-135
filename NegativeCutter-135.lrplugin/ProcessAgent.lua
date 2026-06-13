@@ -148,7 +148,12 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
   -- 2. 若不存在，则 fallback 到 detect_thumb.py + 系统 Python 3（开发/调试场景）
   local pyPath = ProcessAgent.findPythonPath()
   local scriptPath = LrPathUtils.child(pluginPath, "detect_thumb.py")
-  local exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
+  -- PyInstaller onedir bundle: 可执行文件位于 NegativeCutter/NegativeCutter 目录内
+  local exeDir = LrPathUtils.child(pluginPath, "NegativeCutter")
+  local exePath = LrPathUtils.child(exeDir, "NegativeCutter")
+  if not fileExists(exePath) then
+    exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
+  end
   local usePython = fileExists(scriptPath)
   local useExe = fileExists(exePath)
 
@@ -474,7 +479,7 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
         virtualCopy:setRawMetadata('copyName', copyName)
       end)
       if not ok then
-        logger:trace("虚拟副本重命名失败: " + tostring(renameErr))
+        logger:trace("虚拟副本重命名失败: " .. tostring(renameErr))
       end
 
       createdCount = createdCount + 1

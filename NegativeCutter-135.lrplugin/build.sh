@@ -44,25 +44,27 @@ rm -f "$OUTPUT_ZIP"
 echo "==> 运行 PyInstaller..."
 python3 -m PyInstaller NegativeCutter.spec
 
-# 3. 检查可执行文件是否生成并复制到插件根目录
-# PyInstaller 输出可能是 onedir 的 dist/NegativeCutter/NegativeCutter，
-# 也可能是单个文件 dist/NegativeCutter，这里同时兼容两种情况。
-EXE_SRC=""
-if [[ -x "dist/NegativeCutter/NegativeCutter" ]]; then
-  EXE_SRC="dist/NegativeCutter/NegativeCutter"
+# 3. 检查 PyInstaller 输出并复制到插件根目录
+# 优先使用 onedir 模式（dist/NegativeCutter/ 目录），避免 onefile 在 Lightroom
+# 沙箱子进程中自解压失败（退出码 32512 / semaphore 初始化错误）。
+EXE_DIR=""
+if [[ -d "dist/NegativeCutter" && -x "dist/NegativeCutter/NegativeCutter" ]]; then
+  EXE_DIR="dist/NegativeCutter"
 elif [[ -x "dist/NegativeCutter" ]]; then
-  EXE_SRC="dist/NegativeCutter"
+  # 兼容旧的 onefile 输出
+  EXE_DIR="dist/NegativeCutter"
 fi
 
-if [[ -z "$EXE_SRC" ]]; then
+if [[ -z "$EXE_DIR" ]]; then
   echo "ERROR: 可执行文件未生成于 dist/NegativeCutter" >&2
   exit 1
 fi
 
-echo "==> 可执行文件生成成功: $EXE_SRC"
+echo "==> 可执行文件生成成功: $EXE_DIR"
 echo "==> 复制可执行文件到插件根目录..."
-cp -f "$EXE_SRC" "./NegativeCutter"
-chmod +x "./NegativeCutter"
+rm -rf "./NegativeCutter"
+cp -R "$EXE_DIR" "./NegativeCutter"
+chmod +x "./NegativeCutter/NegativeCutter"
 
 # 4. 清理 Python 字节码缓存，避免打包进 zip
 echo "==> 清理 __pycache__..."
