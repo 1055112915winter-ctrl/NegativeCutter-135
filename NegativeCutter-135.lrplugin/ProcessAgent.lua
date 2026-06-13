@@ -31,6 +31,15 @@ if not prefs.expectedFrames then
   prefs.expectedFrames = 6
 end
 
+-- 可靠的文件存在性检查：LrFileUtils.exists 对无后缀二进制文件可能返回 false，
+-- 补一个 io.open 兜底以保证引擎检测不误判。
+local function fileExists(path)
+  if LrFileUtils.exists(path) then return true end
+  local f = io.open(path, "r")
+  if f then f:close(); return true end
+  return false
+end
+
 local ProcessAgent = {}
 
 -- ------------------------------------------------------------------
@@ -139,8 +148,8 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
   local pyPath = ProcessAgent.findPythonPath()
   local scriptPath = LrPathUtils.child(pluginPath, "detect_thumb.py")
   local exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
-  local usePython = LrFileUtils.exists(scriptPath)
-  local useExe = LrFileUtils.exists(exePath)
+  local usePython = fileExists(scriptPath)
+  local useExe = fileExists(exePath)
 
   if not usePython and not useExe then
     return nil, "检测引擎不存在: 未找到 NegativeCutter 可执行文件也未找到 detect_thumb.py"

@@ -23,12 +23,18 @@ return {
       prefs.expectedFrames = 6
     end
 
+    -- 可靠的存在性检查：LrFileUtils.exists 对无后缀二进制文件可能返回 false
+    local function fileExists(path)
+      if LrFileUtils.exists(path) then return true end
+      local f = io.open(path, "r")
+      if f then f:close(); return true end
+      return false
+    end
+
     local detectorScript = LrPathUtils.child(_PLUGIN.path, 'detect_thumb.py')
     local bundledExe = LrPathUtils.child(_PLUGIN.path, 'NegativeCutter')
-    -- LrFileUtils.exists returns true/false; avoid strict equality against boolean
-    -- in case the SDK returns a different truthy/falsy type.
-    local hasScript = LrFileUtils.exists(detectorScript)
-    local hasExe = LrFileUtils.exists(bundledExe)
+    local hasScript = fileExists(detectorScript)
+    local hasExe = fileExists(bundledExe)
     local scriptStatus
     if hasExe then
       scriptStatus = "✓ 已找到打包引擎 (NegativeCutter)"
