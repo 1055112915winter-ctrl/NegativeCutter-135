@@ -25,8 +25,10 @@ return {
 
     local detectorScript = LrPathUtils.child(_PLUGIN.path, 'detect_thumb.py')
     local bundledExe = LrPathUtils.child(_PLUGIN.path, 'NegativeCutter')
-    local hasScript = LrFileUtils.exists(detectorScript) == true
-    local hasExe = LrFileUtils.exists(bundledExe) == true
+    -- LrFileUtils.exists returns true/false; avoid strict equality against boolean
+    -- in case the SDK returns a different truthy/falsy type.
+    local hasScript = LrFileUtils.exists(detectorScript)
+    local hasExe = LrFileUtils.exists(bundledExe)
     local scriptStatus
     if hasExe then
       scriptStatus = "✓ 已找到打包引擎 (NegativeCutter)"
