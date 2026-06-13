@@ -19,6 +19,7 @@ local LrView = import 'LrView'
 local pluginPath = _PLUGIN.path
 
 local ProcessAgent = dofile(LrPathUtils.child(pluginPath, "ProcessAgent.lua"))
+local CropCleaner = dofile(LrPathUtils.child(pluginPath, "CropCleaner.lua"))
 
 local logger = LrLogger('NegativeCutter')
 logger:enable("logfile")
@@ -70,24 +71,15 @@ local function processPhotoWithPreview(catalog, photo, i, total, errorMessages, 
     frame.sourceWidth = result.sourceWidth
   end
 
+  -- 使用 CropCleaner 按胶片类型清理边界
+  local filmType = prefs.filmType or "negative"
+  CropCleaner.cleanFrames(result.frames, result.sourceWidth, result.sourceHeight, filmType)
+
   -- 步骤3: 方向对齐
   result = ProcessAgent.directionAlign(result, photo)
 
   -- 步骤4: 跳过预览，直接使用检测结果
   local frames = result.frames
-
-  -- 补充缺省坐标，并做 0.3% 微小内收清理边界脏边/bleed
-  local INSET = 0.003
-  for _, frame in ipairs(frames) do
-    frame.top = frame.top or 0
-    frame.bottom = frame.bottom or (result.sourceHeight or 1024)
-    frame.left = frame.left or 0
-    frame.right = frame.right or (result.sourceWidth or 1024)
-    frame.relativeTop = math.min(1.0, (frame.relativeTop or 0.0) + INSET)
-    frame.relativeBottom = math.max(0.0, (frame.relativeBottom or 1.0) - INSET)
-    frame.relativeLeft = math.min(1.0, (frame.relativeLeft or 0.0) + INSET)
-    frame.relativeRight = math.max(0.0, (frame.relativeRight or 1.0) - INSET)
-  end
 
   -- 步骤5: 创建虚拟副本并应用裁剪
   local baseName = fileName:gsub("%..+$", "")
@@ -193,6 +185,13 @@ LrTasks.startAsyncTask(function()
     table.insert(formatMenuItems, { title = opt.display, value = i })
   end
 
+  -- Film type options
+  local filmTypeOptions = CropCleaner.availableTypes()
+  local filmTypeMenuItems = {}
+  for i, opt in ipairs(filmTypeOptions) do
+    table.insert(filmTypeMenuItems, { title = opt.display, value = i })
+  end
+
   -- Find current selection index
   local currentFormat = prefs.filmFormat or ""
   local formatIndex = 1
@@ -203,9 +202,19 @@ LrTasks.startAsyncTask(function()
     end
   end
 
+  local currentFilmType = prefs.filmType or "negative"
+  local filmTypeIndex = 1
+  for i, opt in ipairs(filmTypeOptions) do
+    if opt.value == currentFilmType then
+      filmTypeIndex = i
+      break
+    end
+  end
+
   local dialogData = {
     expectedFrames = prefs.expectedFrames or 0,
     formatIndex    = formatIndex,
+    filmTypeIndex  = filmTypeIndex,
   }
 
   local messageText = string.format("将对 %d 个文件进行胶片帧检测并创建虚拟副本:", #selectedPhotos)
@@ -246,6 +255,16 @@ LrTasks.startAsyncTask(function()
       },
       f:static_text { title = "(选自动时由引擎推断宽高比)" },
     },
+    f:row {
+      spacing = f:label_spacing(),
+      f:static_text { title = "胶片类型:", width = 80 },
+      f:popup_menu {
+        items = filmTypeMenuItems,
+        value = bind "filmTypeIndex",
+        width_in_chars = 18,
+      },
+      f:static_text { title = "(决定边界清理强度)" },
+    },
     f:static_text {
       title = "每帧将创建为一个独立的虚拟副本。",
       height_in_lines = 2,
@@ -264,8 +283,11 @@ LrTasks.startAsyncTask(function()
 
   local expectedFrames = tonumber(dialogData.expectedFrames) or (prefs.expectedFrames or 6)
   local chosenFormat = _FORMAT_OPTIONS[dialogData.formatIndex].value
+  local chosenFilmType = filmTypeOptions[dialogData.filmTypeIndex].value
   prefs.filmFormat = chosenFormat
+  prefs.filmType = chosenFilmType
   logger:trace("用户指定的胶片格式: " .. tostring(chosenFormat))
+  logger:trace("用户指定的胶片类型: " .. tostring(chosenFilmType))
   logger:trace("用户指定的预期帧数: " .. tostring(expectedFrames))
 
   local processedCount = 0

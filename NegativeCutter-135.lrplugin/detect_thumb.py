@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FilmCrop 缩略图分析 - 兼容 CLI 入口
-版本: v2.4.3 - 核心算法已提取到 filmcrop 包
+版本: v2.4.4 - 核心算法已提取到 filmcrop 包
 
 向后兼容原有命令行接口：
     python3 detect_thumb.py <thumb_path> [--frames N] [--cleanup-scale X.X] [--original <path>]

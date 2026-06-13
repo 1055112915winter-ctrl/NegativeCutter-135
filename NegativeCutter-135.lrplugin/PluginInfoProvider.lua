@@ -23,7 +23,18 @@ return {
       prefs.expectedFrames = 6
     end
 
-    local scriptStatus = LrFileUtils.exists(prefs.detectorScript) and "✓ 已找到" or "✗ 未找到"
+    local detectorScript = LrPathUtils.child(_PLUGIN.path, 'detect_thumb.py')
+    local bundledExe = LrPathUtils.child(_PLUGIN.path, 'NegativeCutter')
+    local hasScript = LrFileUtils.exists(detectorScript) == true
+    local hasExe = LrFileUtils.exists(bundledExe) == true
+    local scriptStatus
+    if hasExe then
+      scriptStatus = "✓ 已找到打包引擎 (NegativeCutter)"
+    elseif hasScript then
+      scriptStatus = "✓ 已找到检测脚本 (detect_thumb.py)"
+    else
+      scriptStatus = "✗ 未找到检测引擎"
+    end
 
     return {
       {
@@ -32,7 +43,7 @@ return {
 
         f:row {
           f:static_text {
-            title = "版本: 2.4.3",
+            title = "版本: 2.4.4",
           },
         },
 

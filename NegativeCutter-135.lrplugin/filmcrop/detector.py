@@ -100,6 +100,7 @@ def _load_dng_subifd(path: str) -> np.ndarray:
         num_entries2 = struct.unpack(endian + "H", fh.read(2))[0]
         width = height = strip_offsets = strip_counts = None
         samples_per_pixel = 1
+        bits_per_sample = 16
         for _ in range(num_entries2):
             tag = struct.unpack(endian + "H", fh.read(2))[0]
             type_ = struct.unpack(endian + "H", fh.read(2))[0]
@@ -109,6 +110,8 @@ def _load_dng_subifd(path: str) -> np.ndarray:
                 width = int(value_or_offset)
             elif tag == 257:
                 height = int(value_or_offset)
+            elif tag == 258:
+                bits_per_sample = int(value_or_offset)
             elif tag == 273:
                 strip_offsets = int(value_or_offset)
             elif tag == 277:
@@ -120,20 +123,52 @@ def _load_dng_subifd(path: str) -> np.ndarray:
             raise ValueError("SubIFD missing required image tags")
 
         # ---- Read strip tables ------------------------------------------
-        fh.seek(strip_offsets)
-        offsets = struct.unpack(endian + "I" * height, fh.read(4 * height))
-        fh.seek(strip_counts)
-        counts = struct.unpack(endian + "I" * height, fh.read(4 * height))
+        # For count == 1 the value field is inline; otherwise it points to an array.
+        if count == 1:
+            offsets = (strip_offsets,)
+            counts = (strip_counts,)
+        else:
+            fh.seek(strip_offsets)
+            offsets = struct.unpack(endian + "I" * count, fh.read(4 * count))
+            fh.seek(strip_counts)
+            counts = struct.unpack(endian + "I" * count, fh.read(4 * count))
 
         # ---- Read pixel data --------------------------------------------
         # Most scanner DNGs are 16-bit RGB; we average channels to grayscale.
-        img_data = np.empty((height, width, samples_per_pixel), dtype=np.uint16)
-        for row in range(height):
-            fh.seek(offsets[row])
-            row_bytes = fh.read(counts[row])
-            row_arr = np.frombuffer(row_bytes, dtype=np.uint16)
-            row_arr = row_arr.reshape((width, samples_per_pixel))
-            img_data[row] = row_arr
+        # Determine numpy dtype from BitsPerSample; default to uint16.
+        if bits_per_sample <= 8:
+            pixel_dtype = np.uint8
+        elif bits_per_sample <= 16:
+            pixel_dtype = np.uint16
+        else:
+            pixel_dtype = np.uint32
+
+        # If only one strip covers the whole image, read it once and slice per row.
+        if count == 1:
+            fh.seek(offsets[0])
+            full_bytes = fh.read(counts[0])
+            full_arr = np.frombuffer(full_bytes, dtype=pixel_dtype)
+            if endian == ">":
+                full_arr = full_arr.byteswap()
+            # Expected total pixels: height * width * samples_per_pixel
+            expected_pixels = height * width * samples_per_pixel
+            if full_arr.size < expected_pixels:
+                raise ValueError(
+                    f"SubIFD strip byte count too small: {full_arr.size} < {expected_pixels}"
+                )
+            img_data = full_arr[:expected_pixels].reshape(
+                (height, width, samples_per_pixel)
+            )
+        else:
+            img_data = np.empty((height, width, samples_per_pixel), dtype=pixel_dtype)
+            for row in range(height):
+                fh.seek(offsets[row])
+                row_bytes = fh.read(counts[row])
+                row_arr = np.frombuffer(row_bytes, dtype=pixel_dtype)
+                if endian == ">":
+                    row_arr = row_arr.byteswap()
+                row_arr = row_arr.reshape((width, samples_per_pixel))
+                img_data[row] = row_arr
 
         if samples_per_pixel > 1:
             return img_data.mean(axis=2).astype(np.uint16)
@@ -238,25 +273,22 @@ def _local_contrast(signal, idx, mode="peak", radius=None):
     ``None``; the caller should compute it from ``pstep`` to keep the scoring
     scale-invariant across different scan resolutions.
     """
-    """Score a local peak/valley by blending absolute brightness with prominence.
-
-    Absolute brightness (signal value) is the primary cue for gap detection:
-    film gaps are the brightest (peak) or darkest (valley) features in the
-    projection.  Prominence (peak − local baseline) breaks ties when two
-    peaks have similar brightness.  The 0.25 blending factor gives prominence
-    enough weight to suppress frame-content artefacts without letting it
-    override genuinely brighter gap candidates.
-
-    Returns a dimensionless score where higher = more gap-like.
-    """
     val = float(signal[idx])
-    left_baseline = float(np.min(signal[max(0, idx - radius):idx + 1]))
-    right_baseline = float(np.min(signal[idx:min(len(signal), idx + radius + 1)]))
-    baseline = max(left_baseline, right_baseline)
+    left_slice = signal[max(0, idx - radius):idx]
+    right_slice = signal[idx + 1:min(len(signal), idx + radius + 1)]
+
     if mode == "peak":
+        # Gap is bright; baseline is the darker neighbouring frame content.
+        left_baseline = float(np.min(left_slice)) if left_slice.size else val
+        right_baseline = float(np.min(right_slice)) if right_slice.size else val
+        baseline = max(left_baseline, right_baseline)
         prominence = val - baseline
         return val * (1.0 + prominence * 0.25)
     else:
+        # Gap is dark (valley); baseline is the brighter neighbouring frame content.
+        left_baseline = float(np.max(left_slice)) if left_slice.size else val
+        right_baseline = float(np.max(right_slice)) if right_slice.size else val
+        baseline = min(left_baseline, right_baseline)
         prominence = baseline - val
         return (1.0 - val) * (1.0 + prominence * 0.25)
 
@@ -363,10 +395,12 @@ def _enforce_boundary_consistency(boundaries, all_peaks, size, expected_frames):
                     best_dist = d
                     best = p
         boundaries[i] = best
-    # Restore monotonicity
+    # Restore monotonicity, but never push the last boundary past ``size``.
     for i in range(1, len(boundaries)):
         if boundaries[i] <= boundaries[i - 1]:
             boundaries[i] = boundaries[i - 1] + 1
+    if boundaries[-1] > size:
+        boundaries[-1] = size
     return boundaries
 
 
@@ -654,10 +688,16 @@ def _find_margin_content_ref(proj_slice, content_ref):
     contrast = abs(edge_ref - content_ref)
     if contrast < 0.03:
         return None
-    target = edge_ref - contrast * 0.20
+    # 20% of the way from edge_ref toward content_ref (works for both bright and dark edges)
+    direction = 1.0 if content_ref > edge_ref else -1.0
+    target = edge_ref + direction * contrast * 0.20
     for i in range(len(proj_slice)):
-        if float(proj_slice[i]) <= target:
-            return i
+        if direction > 0:
+            if float(proj_slice[i]) >= target:
+                return i
+        else:
+            if float(proj_slice[i]) <= target:
+                return i
     return None
 
 

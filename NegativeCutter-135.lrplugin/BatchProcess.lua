@@ -14,6 +14,7 @@ local LrView = import 'LrView'
 
 local pluginPath = _PLUGIN.path
 local ProcessAgent = dofile(LrPathUtils.child(pluginPath, "ProcessAgent.lua"))
+local CropCleaner = dofile(LrPathUtils.child(pluginPath, "CropCleaner.lua"))
 
 local logger = LrLogger('NegativeCutter')
 logger:enable("logfile")
@@ -57,6 +58,13 @@ LrTasks.startAsyncTask(function()
     table.insert(formatMenuItems, { title = opt.display, value = i })
   end
 
+  -- Film type options
+  local filmTypeOptions = CropCleaner.availableTypes()
+  local filmTypeMenuItems = {}
+  for i, opt in ipairs(filmTypeOptions) do
+    table.insert(filmTypeMenuItems, { title = opt.display, value = i })
+  end
+
   local currentFormat = prefs.filmFormat or ""
   local formatIndex = 1
   for i, opt in ipairs(_FORMAT_OPTIONS) do
@@ -66,9 +74,19 @@ LrTasks.startAsyncTask(function()
     end
   end
 
+  local currentFilmType = prefs.filmType or "negative"
+  local filmTypeIndex = 1
+  for i, opt in ipairs(filmTypeOptions) do
+    if opt.value == currentFilmType then
+      filmTypeIndex = i
+      break
+    end
+  end
+
   local dialogData = {
     expectedFrames = prefs.expectedFrames or 0,
     formatIndex    = formatIndex,
+    filmTypeIndex  = filmTypeIndex,
   }
 
   local contents = f:column {
@@ -99,6 +117,16 @@ LrTasks.startAsyncTask(function()
       },
       f:static_text { title = "(选自动时由引擎推断宽高比)" },
     },
+    f:row {
+      spacing = f:label_spacing(),
+      f:static_text { title = "胶片类型:", width = 80 },
+      f:popup_menu {
+        items = filmTypeMenuItems,
+        value = bind "filmTypeIndex",
+        width_in_chars = 18,
+      },
+      f:static_text { title = "(决定边界清理强度)" },
+    },
     f:static_text {
       title = "批量处理将跳过预览，直接为每个文件创建虚拟副本。",
       height_in_lines = 2,
@@ -115,9 +143,12 @@ LrTasks.startAsyncTask(function()
 
   local expectedFrames = tonumber(dialogData.expectedFrames) or (prefs.expectedFrames or 6)
   local chosenFormat = _FORMAT_OPTIONS[dialogData.formatIndex].value
+  local chosenFilmType = filmTypeOptions[dialogData.filmTypeIndex].value
   prefs.filmFormat = chosenFormat
+  prefs.filmType = chosenFilmType
   logger:trace("批量处理预期帧数: " .. tostring(expectedFrames))
   logger:trace("批量处理胶片格式: " .. tostring(chosenFormat))
+  logger:trace("批量处理胶片类型: " .. tostring(chosenFilmType))
 
   local stats = {
     total = #selectedPhotos,

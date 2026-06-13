@@ -48,6 +48,13 @@ Lightroom SDK 不支持插件内置全局快捷键。如需快捷操作，请通
 
 ## 版本历史
 
+### v2.4.4 (2026-06-13)
+- **分发包引擎优先级修复**：优先使用内置 `NegativeCutter` 打包引擎，不再误用系统 Python 导致 `No module named 'numpy'`
+- **胶片类型选择**：新增负片/反转片/正片选项，独立边界清理模块 `CropCleaner.lua`
+- **DNG 解码加固**：SubIFD 解析支持 8/16/32-bit、单条带/多条带、大端字节序
+- **检测算法修复**：valley mode baseline、暗边缘检测、边界单调性守卫
+- **打包方式调整**：PyInstaller 从 onefile 改为 onedir，提升 macOS 稳定性
+
 ### v2.4.3 (2026-06-09)
 - **SubIFD DNG 解码**：直接解析 DNG SubIFD 结构读取 RAW 像素，无需 rawpy/LibRaw
 - **严格 3:2 比例锁定**：middle frames 自动输出精确 3:2，无需手动锁定
