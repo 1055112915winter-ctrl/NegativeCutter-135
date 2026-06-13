@@ -2155,6 +2155,13 @@ def analyze_image(
     t0 = time.time()
 
     arr, input_loader = _load_image_array(image_path, return_loader=True)
+    if arr.ndim == 3:
+        # Some DNG decoders (e.g. certain CFA layouts) return a colour array.
+        # Convert to grayscale for the downstream projection-based detection.
+        if arr.shape[2] in (3, 4):
+            arr = np.dot(arr[..., :3], [0.2989, 0.5870, 0.1140]).astype(arr.dtype)
+        else:
+            arr = arr[..., 0]
     thumb_h, thumb_w = arr.shape
     is_horizontal = thumb_w >= thumb_h
 
@@ -2176,6 +2183,11 @@ def analyze_image(
     if original_path:
         try:
             orig_arr, orig_loader = _load_image_array(original_path, return_loader=True)
+            if orig_arr.ndim == 3:
+                if orig_arr.shape[2] in (3, 4):
+                    orig_arr = np.dot(orig_arr[..., :3], [0.2989, 0.5870, 0.1140]).astype(orig_arr.dtype)
+                else:
+                    orig_arr = orig_arr[..., 0]
             orig_h, orig_w = orig_arr.shape
         except Exception:
             pass

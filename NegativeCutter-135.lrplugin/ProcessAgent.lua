@@ -186,49 +186,68 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
       .. '"'
   end
 
-  local cmd
+  local function buildCommand(enginePath, isPython)
+    local base
+    if isPython then
+      base = string.format('%s %s %s --frames %d --cleanup-scale 0.50',
+        shellEscape(pyPath), shellEscape(scriptPath), shellEscape(inputPath), expectedFrames)
+      logger:trace("使用 Python 3 直接运行 detect_thumb.py: " .. pyPath)
+    else
+      base = string.format('%s %s --frames %d --cleanup-scale 0.50',
+        shellEscape(enginePath), shellEscape(inputPath), expectedFrames)
+      logger:trace("使用打包的可执行文件: " .. enginePath)
+    end
+
+    if originalPath and LrFileUtils.exists(originalPath) then
+      base = base .. ' --original ' .. shellEscape(originalPath)
+    end
+
+    if formatHint and formatHint ~= "" then
+      base = base .. ' --format ' .. shellEscape(formatHint)
+    end
+
+    if lrWidth and lrHeight then
+      base = base .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
+    end
+
+    return base
+  end
+
+  local function runCommand(command)
+    local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
+    local shellCmd = command .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
+    local exitCode = LrTasks.execute(shellCmd)
+
+    local output = ""
+    local file = io.open(tempOutputFile, "r")
+    if file then
+      output = file:read("*a") or ""
+      file:close()
+      LrFileUtils.delete(tempOutputFile)
+    end
+
+    return exitCode, output
+  end
+
+  -- 优先尝试 PyInstaller onedir 二进制；如果执行失败（如 Lightroom 子进程限制），
+  -- fallback 到系统 Python + detect_thumb.py（需要用户已安装 rawpy/numpy/Pillow）。
+  local exitCode, output
   if useExe then
-    -- 优先使用 PyInstaller 打包的可执行文件（分发场景，无需用户安装 Python 依赖）
-    cmd = string.format('%s %s --frames %d --cleanup-scale 0.50',
-      shellEscape(exePath), shellEscape(inputPath), expectedFrames)
-    logger:trace("使用打包的可执行文件: " .. exePath)
+    exitCode, output = runCommand(buildCommand(exePath, false))
+    if exitCode ~= 0 and usePython and (exitCode == 32512 or exitCode == 126 or exitCode == 127) then
+      logger:trace(string.format("打包引擎执行失败 (exit=%d)，fallback 到 Python 脚本", exitCode))
+      exitCode, output = runCommand(buildCommand(nil, true))
+    end
   elseif usePython then
-    -- fallback 到 Python 3 直接运行（开发版本，便于快速迭代）
-    cmd = string.format('%s %s %s --frames %d --cleanup-scale 0.50',
-      shellEscape(pyPath), shellEscape(scriptPath), shellEscape(inputPath), expectedFrames)
-    logger:trace("使用 Python 3 直接运行 detect_thumb.py: " .. pyPath)
-  end
-
-  if originalPath and LrFileUtils.exists(originalPath) then
-    cmd = cmd .. ' --original ' .. shellEscape(originalPath)
-  end
-
-  if formatHint and formatHint ~= "" then
-    cmd = cmd .. ' --format ' .. shellEscape(formatHint)
-  end
-
-  if lrWidth and lrHeight then
-    cmd = cmd .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
-  end
-
-  local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
-  -- 同时捕获 stderr，便于诊断异常
-  local shellCmd = cmd .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
-  local exitCode = LrTasks.execute(shellCmd)
-
-  local output = ""
-  local file = io.open(tempOutputFile, "r")
-  if file then
-    output = file:read("*a") or ""
-    file:close()
-    LrFileUtils.delete(tempOutputFile)
+    exitCode, output = runCommand(buildCommand(nil, true))
   end
 
   logger:trace(string.format("analyzeWithPython exit=%d, len=%d", exitCode, #output))
   logger:trace("analyzeWithPython output: " .. string.sub(output, 1, 3000))
 
   if exitCode ~= 0 then
-    local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", exePath, exitCode)
+    local failedPath = (exitCode == 32512 or exitCode == 126 or exitCode == 127) and exePath or scriptPath
+    local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", failedPath or "未知", exitCode)
     if #output > 0 then err = err .. ": " .. string.sub(output, 1, 2000) end
     return nil, err
   end
