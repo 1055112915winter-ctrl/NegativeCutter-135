@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# build.sh — 一键构建 NegativeCutter-135 分发包
+#
+# 依赖：
+#   - Python 3
+#   - pip install pyinstaller
+#   - 已安装 numpy、Pillow、rawpy（可选）等 filmcrop 依赖
+#
+# 用法：
+#   cd NegativeCutter-135.lrplugin
+#   ./build.sh
+#
+# 输出：
+#   ../NegativeCutter-135-v{VERSION}.zip
+
+set -euo pipefail
+
+# 解析版本号
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+VERSION=$(python3 - <<'PY'
+import sys
+sys.path.insert(0, '.')
+from filmcrop import __version__
+print(__version__)
+PY
+)
+
+PLUGIN_NAME="NegativeCutter-135"
+OUTPUT_DIR="$(dirname "$SCRIPT_DIR")"
+OUTPUT_ZIP="${OUTPUT_DIR}/${PLUGIN_NAME}-v${VERSION}.zip"
+
+echo "==> 构建 NegativeCutter-135 v${VERSION}"
+echo "==> 插件目录: $SCRIPT_DIR"
+echo "==> 输出包:   $OUTPUT_ZIP"
+
+# 1. 清理旧构建产物
+echo "==> 清理旧构建产物..."
+rm -rf build dist
+rm -f "$OUTPUT_ZIP"
+
+# 2. 用 PyInstaller 构建 onedir 可执行文件
+echo "==> 运行 PyInstaller..."
+python3 -m PyInstaller NegativeCutter.spec
+
+# 3. 检查可执行文件是否生成并复制到插件根目录
+# PyInstaller 输出可能是 onedir 的 dist/NegativeCutter/NegativeCutter，
+# 也可能是单个文件 dist/NegativeCutter，这里同时兼容两种情况。
+EXE_SRC=""
+if [[ -x "dist/NegativeCutter/NegativeCutter" ]]; then
+  EXE_SRC="dist/NegativeCutter/NegativeCutter"
+elif [[ -x "dist/NegativeCutter" ]]; then
+  EXE_SRC="dist/NegativeCutter"
+fi
+
+if [[ -z "$EXE_SRC" ]]; then
+  echo "ERROR: 可执行文件未生成于 dist/NegativeCutter" >&2
+  exit 1
+fi
+
+echo "==> 可执行文件生成成功: $EXE_SRC"
+echo "==> 复制可执行文件到插件根目录..."
+cp -f "$EXE_SRC" "./NegativeCutter"
+chmod +x "./NegativeCutter"
+
+# 4. 清理 Python 字节码缓存，避免打包进 zip
+echo "==> 清理 __pycache__..."
+find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name '*.pyc' -delete 2>/dev/null || true
+find . -type f -name '*.pyo' -delete 2>/dev/null || true
+
+# 5. 打包（注意：不要把 dist/ 和 build/ 打进 zip）
+echo "==> 打包插件..."
+TMP_PACKAGE_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_PACKAGE_DIR"' EXIT
+
+# 复制插件目录到临时目录，并剔除开发/构建产物
+cp -R "$SCRIPT_DIR" "$TMP_PACKAGE_DIR/${PLUGIN_NAME}.lrplugin"
+cd "$TMP_PACKAGE_DIR/${PLUGIN_NAME}.lrplugin"
+rm -rf build dist __pycache__ .DS_Store
+find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name '*.pyc' -delete 2>/dev/null || true
+find . -type f -name '*.pyo' -delete 2>/dev/null || true
+
+# 6. 生成 zip
+cd "$TMP_PACKAGE_DIR"
+zip -r -q "$OUTPUT_ZIP" "${PLUGIN_NAME}.lrplugin"
+
+echo "==> 构建完成: $OUTPUT_ZIP"
+ls -lh "$OUTPUT_ZIP"

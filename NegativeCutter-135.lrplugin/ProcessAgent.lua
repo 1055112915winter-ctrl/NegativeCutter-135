@@ -20,6 +20,7 @@ local json = dofile(LrPathUtils.child(pluginPath, "json.lua"))
 
 local ThumbnailAgent = dofile(LrPathUtils.child(pluginPath, "ThumbnailAgent.lua"))
 local ApplierAgent = dofile(LrPathUtils.child(pluginPath, "ApplierAgent.lua"))
+local CropCleaner = dofile(LrPathUtils.child(pluginPath, "CropCleaner.lua"))
 
 local logger = LrLogger('NegativeCutter.ProcessAgent')
 logger:enable("logfile")
@@ -28,6 +29,15 @@ local prefs = LrPrefs.prefsForPlugin()
 
 if not prefs.expectedFrames then
   prefs.expectedFrames = 6
+end
+
+-- 可靠的文件存在性检查：LrFileUtils.exists 对无后缀二进制文件可能返回 false，
+-- 补一个 io.open 兜底以保证引擎检测不误判。
+local function fileExists(path)
+  if LrFileUtils.exists(path) then return true end
+  local f = io.open(path, "r")
+  if f then f:close(); return true end
+  return false
 end
 
 local ProcessAgent = {}
@@ -132,15 +142,17 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     LrFileUtils.createAllDirectories(WORK_DIR)
   end
 
-  -- 优先使用 Python 3 直接运行 detect_thumb.py（开发版本，支持最新特性如 SubIFD）
+  -- 引擎选择策略：
+  -- 1. 优先使用 PyInstaller 打包的 NegativeCutter 可执行文件（分发场景，无需用户安装依赖）
+  -- 2. 若不存在，则 fallback 到 detect_thumb.py + 系统 Python 3（开发/调试场景）
   local pyPath = ProcessAgent.findPythonPath()
   local scriptPath = LrPathUtils.child(pluginPath, "detect_thumb.py")
-  local usePython = LrFileUtils.exists(scriptPath)
   local exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
-  local useExe = LrFileUtils.exists(exePath)
+  local usePython = fileExists(scriptPath)
+  local useExe = fileExists(exePath)
 
   if not usePython and not useExe then
-    return nil, "检测引擎不存在: 未找到 Python 3 也未找到 NegativeCutter 可执行文件"
+    return nil, "检测引擎不存在: 未找到 NegativeCutter 可执行文件也未找到 detect_thumb.py"
   end
 
   -- 优先使用缩略图；若缩略图不可用，尝试原图
@@ -154,25 +166,34 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     end
   end
 
+    -- 安全地转义 shell 参数：将反斜杠和双引号进行转义，用于引号包裹
+  local function shellEscape(s)
+    if type(s) ~= "string" then
+      return '""'
+    end
+    -- POSIX sh: 反斜杠转义反斜杠和双引号，再用双引号包裹
+    return '"' .. s:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
+  end
+
   local cmd
-  if usePython then
-    -- 使用 Python 3 直接运行（优先，便于快速迭代）
-    cmd = string.format('"%s" "%s" "%s" --frames %d --cleanup-scale 0.50',
-      pyPath, scriptPath, inputPath, expectedFrames)
-    logger:trace("使用 Python 3 直接运行 detect_thumb.py: " .. pyPath)
-  else
-    -- fallback 到 PyInstaller 打包的可执行文件
-    cmd = string.format('"%s" "%s" --frames %d --cleanup-scale 0.50',
-      exePath, inputPath, expectedFrames)
+  if useExe then
+    -- 优先使用 PyInstaller 打包的可执行文件（分发场景，无需用户安装 Python 依赖）
+    cmd = string.format('%s %s --frames %d --cleanup-scale 0.50',
+      shellEscape(exePath), shellEscape(inputPath), expectedFrames)
     logger:trace("使用打包的可执行文件: " .. exePath)
+  elseif usePython then
+    -- fallback 到 Python 3 直接运行（开发版本，便于快速迭代）
+    cmd = string.format('%s %s %s --frames %d --cleanup-scale 0.50',
+      shellEscape(pyPath), shellEscape(scriptPath), shellEscape(inputPath), expectedFrames)
+    logger:trace("使用 Python 3 直接运行 detect_thumb.py: " .. pyPath)
   end
 
   if originalPath and LrFileUtils.exists(originalPath) then
-    cmd = cmd .. ' --original "' .. originalPath .. '"'
+    cmd = cmd .. ' --original ' .. shellEscape(originalPath)
   end
 
   if formatHint and formatHint ~= "" then
-    cmd = cmd .. ' --format "' .. formatHint .. '"'
+    cmd = cmd .. ' --format ' .. shellEscape(formatHint)
   end
 
   if lrWidth and lrHeight then
@@ -181,7 +202,7 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
 
   local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
   -- 同时捕获 stderr，便于诊断异常
-  local shellCmd = cmd .. ' > "' .. tempOutputFile .. '" 2>&1'
+  local shellCmd = cmd .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
   local exitCode = LrTasks.execute(shellCmd)
 
   local output = ""
@@ -396,18 +417,11 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
       f0.relativeTop or 0, f0.relativeBottom or 0, f0.relativeLeft or 0, f0.relativeRight or 0))
   end
 
-  -- 补充缺省坐标，并做 0.3% 微小内收清理边界脏边/bleed
-  local INSET = 0.003
-  for _, frame in ipairs(frames) do
-    frame.top = frame.top or 0
-    frame.bottom = frame.bottom or (result.sourceHeight or 1024)
-    frame.left = frame.left or 0
-    frame.right = frame.right or (result.sourceWidth or 1024)
-    frame.relativeTop = math.min(1.0, (frame.relativeTop or 0.0) + INSET)
-    frame.relativeBottom = math.max(0.0, (frame.relativeBottom or 1.0) - INSET)
-    frame.relativeLeft = math.min(1.0, (frame.relativeLeft or 0.0) + INSET)
-    frame.relativeRight = math.max(0.0, (frame.relativeRight or 1.0) - INSET)
+  -- 使用 CropCleaner 按胶片类型清理边界
+  local filmType = prefs.filmType or "negative"
+  CropCleaner.cleanFrames(frames, result.sourceWidth, result.sourceHeight, filmType)
 
+  for _, frame in ipairs(frames) do
     catalog:setSelectedPhotos(photo, {photo})
     LrTasks.sleep(0.1)
 
@@ -450,6 +464,7 @@ function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, fo
       end
 
       pcall(function()
+        local copyName = string.format("%s_帧%02d", baseName, frameIdx)
         virtualCopy:setRawMetadata('copyName', copyName)
       end)
 
