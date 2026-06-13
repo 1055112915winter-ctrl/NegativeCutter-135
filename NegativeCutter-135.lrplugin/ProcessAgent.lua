@@ -183,55 +183,73 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
 
   -- Lightroom 的 LrTasks.execute 对插件路径中的中文/空格处理不稳定，
   -- 因此把 onedir 包复制到英文临时目录再执行。
-  -- 为避免中文路径出现在 shell 命令中，先把源路径写入临时文件，
-  -- 再由 Python 读取该文件并执行 shutil.copytree。
+  -- 这里使用 LrFileUtils.copy 逐文件复制（通过构建时生成的 manifest.txt），
+  -- 完全避免在 shell 命令中传递中文路径。
   local runtimeRoot = LrPathUtils.child(LrPathUtils.getStandardFilePath("home"), "NegativeCutter_Runtime")
   local runtimeExeDir = LrPathUtils.child(runtimeRoot, "NegativeCutter")
   local runtimeExePath = LrPathUtils.child(runtimeExeDir, "NegativeCutter")
+
+  local function copyFileWithDirs(srcFile, dstFile)
+    local dstDir = LrPathUtils.parent(dstFile)
+    if not LrFileUtils.exists(dstDir) then
+      LrFileUtils.createAllDirectories(dstDir)
+    end
+    LrFileUtils.copy(srcFile, dstFile)
+  end
 
   local function ensureRuntimeBundle()
     if fileExists(runtimeExePath) then
       return true
     end
 
-    -- 把源路径写入英文临时文件，避免 shell 命令中出现中文
-    local srcListFile = LrPathUtils.child(WORK_DIR, "engine_src.txt")
-    local f = io.open(srcListFile, "w")
-    if not f then
-      logger:error("无法写入源路径文件: " .. srcListFile)
-      return false
+    -- 清理旧副本
+    if LrFileUtils.exists(runtimeExeDir) then
+      LrFileUtils.delete(runtimeExeDir)
     end
-    f:write(localExeDir)
-    f:close()
 
-    -- 用 Python 复制整个 onedir 目录；命令字符串只包含英文路径
-    -- 源路径通过临时文件传递，避免中文路径出现在 shell 命令中
-    local pyPath = ProcessAgent.findPythonPath()
-    local pyCopyCmd = string.format(
-      "%s -c \"import shutil, os; src=open('%s').read().strip(); dst='%s'; shutil.rmtree(dst, ignore_errors=True); shutil.copytree(src, dst)\"",
-      shellEscape(pyPath),
-      srcListFile,
-      runtimeExeDir
-    )
-    logger:trace("复制引擎到临时目录: " .. pyCopyCmd)
-    local cpExit = LrTasks.execute(pyCopyCmd)
-    if cpExit ~= 0 then
-      logger:error("复制引擎到临时目录失败，exit=" .. tostring(cpExit))
+    local manifestPath = LrPathUtils.child(localExeDir, "manifest.txt")
+    if not LrFileUtils.exists(manifestPath) then
+      logger:error("缺少 manifest.txt，无法复制引擎: " .. manifestPath)
       return false
     end
+
+    local manifestFile = io.open(manifestPath, "r")
+    if not manifestFile then
+      logger:error("无法读取 manifest.txt: " .. manifestPath)
+      return false
+    end
+
+    local copyCount = 0
+    for line in manifestFile:lines() do
+      local relPath = line:match("^%./(.+)$")
+      if relPath and relPath ~= "manifest.txt" then
+        local srcFile = LrPathUtils.child(localExeDir, relPath)
+        local dstFile = LrPathUtils.child(runtimeExeDir, relPath)
+        local ok, copyErr = pcall(function()
+          copyFileWithDirs(srcFile, dstFile)
+        end)
+        if not ok then
+          manifestFile:close()
+          logger:error(string.format("复制文件失败: %s -> %s: %s", srcFile, dstFile, tostring(copyErr)))
+          return false
+        end
+        copyCount = copyCount + 1
+      end
+    end
+    manifestFile:close()
+
+    logger:trace(string.format("已复制 %d 个引擎文件到 %s", copyCount, runtimeExeDir))
 
     -- 确保可执行权限
     local chmodCmd = string.format('chmod +x %s', shellEscape(runtimeExePath))
     LrTasks.execute(chmodCmd)
 
-    -- 复制完成后删除源路径文件
-    pcall(function() LrFileUtils.delete(srcListFile) end)
-
     return fileExists(runtimeExePath)
   end
 
-  if not ensureRuntimeBundle() then
-    -- 复制失败时直接报错，不尝试原路径执行
+  local ok, ensureErr = pcall(ensureRuntimeBundle)
+  if not ok or not ensureErr then
+    logger:error("检测引擎准备失败: " .. tostring(ensureErr))
     return nil, "检测引擎准备失败: 无法复制到临时目录"
   end
 

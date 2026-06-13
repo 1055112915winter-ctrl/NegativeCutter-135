@@ -66,6 +66,11 @@ rm -rf "./NegativeCutter"
 cp -R "$EXE_DIR" "./NegativeCutter"
 chmod +x "./NegativeCutter/NegativeCutter"
 
+# 4.1 生成 manifest.txt，供 ProcessAgent.lua 在 Lightroom 内用 LrFileUtils.copy 复制 onedir 目录。
+# 避免使用 shell 命令处理中文路径。
+echo "==> 生成引擎文件清单..."
+(cd "./NegativeCutter" && find . -type f > manifest.txt)
+
 # 4. 清理 Python 字节码缓存，避免打包进 zip
 echo "==> 清理 __pycache__..."
 find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
