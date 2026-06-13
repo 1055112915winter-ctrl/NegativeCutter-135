@@ -145,13 +145,14 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
 
   -- 仅使用 PyInstaller onedir 打包的 NegativeCutter 可执行文件。
   -- 如果它无法执行，直接报错，不 fallback 到 Python 脚本，避免掩盖环境问题。
-  local exeDir = LrPathUtils.child(pluginPath, "NegativeCutter")
-  local exePath = LrPathUtils.child(exeDir, "NegativeCutter")
-  if not fileExists(exePath) then
-    exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
+  local localExeDir = LrPathUtils.child(pluginPath, "NegativeCutter")
+  local localExePath = LrPathUtils.child(localExeDir, "NegativeCutter")
+  if not fileExists(localExePath) then
+    localExePath = LrPathUtils.child(pluginPath, "NegativeCutter")
+    localExeDir = pluginPath
   end
 
-  if not fileExists(exePath) then
+  if not fileExists(localExePath) then
     return nil, "检测引擎不存在: 未找到 NegativeCutter 可执行文件"
   end
 
@@ -180,9 +181,43 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
       .. '"'
   end
 
+  -- Lightroom 的 LrTasks.execute 对插件路径中的中文/空格处理不稳定，
+  -- 直接把 onedir 包复制到英文临时目录 WORK_DIR 下再执行，避免路径问题。
+  local runtimeExeDir = LrPathUtils.child(WORK_DIR, "NegativeCutter")
+  local runtimeExePath = LrPathUtils.child(runtimeExeDir, "NegativeCutter")
+
+  local function ensureRuntimeBundle()
+    if fileExists(runtimeExePath) then
+      return true
+    end
+    -- 清理旧副本（如果有）
+    if LrFileUtils.exists(runtimeExeDir) then
+      local rmCmd = string.format('rm -rf %s', shellEscape(runtimeExeDir))
+      LrTasks.execute(rmCmd)
+    end
+    -- 用 cp -R 复制整个 onedir 目录
+    local cpCmd = string.format('cp -R %s %s', shellEscape(localExeDir), shellEscape(runtimeExeDir))
+    local cpExit = LrTasks.execute(cpCmd)
+    if cpExit ~= 0 then
+      logger:error("复制引擎到临时目录失败: " .. cpCmd)
+      return false
+    end
+    -- 确保可执行权限
+    local chmodCmd = string.format('chmod +x %s', shellEscape(runtimeExePath))
+    LrTasks.execute(chmodCmd)
+    return fileExists(runtimeExePath)
+  end
+
+  if not ensureRuntimeBundle() then
+    -- 复制失败时直接报错，不尝试原路径执行
+    return nil, "检测引擎准备失败: 无法复制到临时目录"
+  end
+
+  local exePath = runtimeExePath
+  logger:trace("使用临时目录引擎: " .. exePath)
+
   local cmd = string.format('%s %s --frames %d --cleanup-scale 0.50',
     shellEscape(exePath), shellEscape(inputPath), expectedFrames)
-  logger:trace("使用打包的可执行文件: " .. exePath)
 
   if originalPath and LrFileUtils.exists(originalPath) then
     cmd = cmd .. ' --original ' .. shellEscape(originalPath)
