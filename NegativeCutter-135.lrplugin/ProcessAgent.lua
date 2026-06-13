@@ -35,8 +35,9 @@ end
 -- 补一个 io.open 兜底以保证引擎检测不误判。
 local function fileExists(path)
   if LrFileUtils.exists(path) then return true end
-  local f = io.open(path, "r")
-  if f then f:close(); return true end
+  -- 二进制模式 + pcall：避免文本模式对 Mach-O 可执行文件异常，也避免 open 抛错
+  local ok, f = pcall(io.open, path, "rb")
+  if ok and f then f:close(); return true end
   return false
 end
 
@@ -166,13 +167,18 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     end
   end
 
-    -- 安全地转义 shell 参数：将反斜杠和双引号进行转义，用于引号包裹
+  -- 安全地转义 POSIX sh 参数：在双引号内处理反斜杠、双引号、美元符、反引号、换行
   local function shellEscape(s)
     if type(s) ~= "string" then
       return '""'
     end
-    -- POSIX sh: 反斜杠转义反斜杠和双引号，再用双引号包裹
-    return '"' .. s:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
+    return '"' .. s
+      :gsub('\\', '\\\\')
+      :gsub('"', '\\"')
+      :gsub('$', '\\$')
+      :gsub('`', '\\`')
+      :gsub('\n', '\\n')
+      .. '"'
   end
 
   local cmd

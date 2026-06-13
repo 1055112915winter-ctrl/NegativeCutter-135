@@ -26,8 +26,9 @@ return {
     -- 可靠的存在性检查：LrFileUtils.exists 对无后缀二进制文件可能返回 false
     local function fileExists(path)
       if LrFileUtils.exists(path) then return true end
-      local f = io.open(path, "r")
-      if f then f:close(); return true end
+      -- 二进制模式 + pcall：避免文本模式对 Mach-O 可执行文件异常，也避免 open 抛错
+      local ok, f = pcall(io.open, path, "rb")
+      if ok and f then f:close(); return true end
       return false
     end
 
