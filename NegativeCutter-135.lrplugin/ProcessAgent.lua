@@ -143,22 +143,16 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     LrFileUtils.createAllDirectories(WORK_DIR)
   end
 
-  -- 引擎选择策略：
-  -- 1. 优先使用 PyInstaller 打包的 NegativeCutter 可执行文件（分发场景，无需用户安装依赖）
-  -- 2. 若不存在，则 fallback 到 detect_thumb.py + 系统 Python 3（开发/调试场景）
-  local pyPath = ProcessAgent.findPythonPath()
-  local scriptPath = LrPathUtils.child(pluginPath, "detect_thumb.py")
-  -- PyInstaller onedir bundle: 可执行文件位于 NegativeCutter/NegativeCutter 目录内
+  -- 仅使用 PyInstaller onedir 打包的 NegativeCutter 可执行文件。
+  -- 如果它无法执行，直接报错，不 fallback 到 Python 脚本，避免掩盖环境问题。
   local exeDir = LrPathUtils.child(pluginPath, "NegativeCutter")
   local exePath = LrPathUtils.child(exeDir, "NegativeCutter")
   if not fileExists(exePath) then
     exePath = LrPathUtils.child(pluginPath, "NegativeCutter")
   end
-  local usePython = fileExists(scriptPath)
-  local useExe = fileExists(exePath)
 
-  if not usePython and not useExe then
-    return nil, "检测引擎不存在: 未找到 NegativeCutter 可执行文件也未找到 detect_thumb.py"
+  if not fileExists(exePath) then
+    return nil, "检测引擎不存在: 未找到 NegativeCutter 可执行文件"
   end
 
   -- 优先使用缩略图；若缩略图不可用，尝试原图
@@ -186,68 +180,40 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
       .. '"'
   end
 
-  local function buildCommand(enginePath, isPython)
-    local base
-    if isPython then
-      base = string.format('%s %s %s --frames %d --cleanup-scale 0.50',
-        shellEscape(pyPath), shellEscape(scriptPath), shellEscape(inputPath), expectedFrames)
-      logger:trace("使用 Python 3 直接运行 detect_thumb.py: " .. pyPath)
-    else
-      base = string.format('%s %s --frames %d --cleanup-scale 0.50',
-        shellEscape(enginePath), shellEscape(inputPath), expectedFrames)
-      logger:trace("使用打包的可执行文件: " .. enginePath)
-    end
+  local cmd = string.format('%s %s --frames %d --cleanup-scale 0.50',
+    shellEscape(exePath), shellEscape(inputPath), expectedFrames)
+  logger:trace("使用打包的可执行文件: " .. exePath)
 
-    if originalPath and LrFileUtils.exists(originalPath) then
-      base = base .. ' --original ' .. shellEscape(originalPath)
-    end
-
-    if formatHint and formatHint ~= "" then
-      base = base .. ' --format ' .. shellEscape(formatHint)
-    end
-
-    if lrWidth and lrHeight then
-      base = base .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
-    end
-
-    return base
+  if originalPath and LrFileUtils.exists(originalPath) then
+    cmd = cmd .. ' --original ' .. shellEscape(originalPath)
   end
 
-  local function runCommand(command)
-    local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
-    local shellCmd = command .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
-    local exitCode = LrTasks.execute(shellCmd)
-
-    local output = ""
-    local file = io.open(tempOutputFile, "r")
-    if file then
-      output = file:read("*a") or ""
-      file:close()
-      LrFileUtils.delete(tempOutputFile)
-    end
-
-    return exitCode, output
+  if formatHint and formatHint ~= "" then
+    cmd = cmd .. ' --format ' .. shellEscape(formatHint)
   end
 
-  -- 优先尝试 PyInstaller onedir 二进制；如果执行失败（如 Lightroom 子进程限制），
-  -- fallback 到系统 Python + detect_thumb.py（需要用户已安装 rawpy/numpy/Pillow）。
-  local exitCode, output
-  if useExe then
-    exitCode, output = runCommand(buildCommand(exePath, false))
-    if exitCode ~= 0 and usePython and (exitCode == 32512 or exitCode == 126 or exitCode == 127) then
-      logger:trace(string.format("打包引擎执行失败 (exit=%d)，fallback 到 Python 脚本", exitCode))
-      exitCode, output = runCommand(buildCommand(nil, true))
-    end
-  elseif usePython then
-    exitCode, output = runCommand(buildCommand(nil, true))
+  if lrWidth and lrHeight then
+    cmd = cmd .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
+  end
+
+  local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
+  -- 同时捕获 stderr，便于诊断异常
+  local shellCmd = cmd .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
+  local exitCode = LrTasks.execute(shellCmd)
+
+  local output = ""
+  local file = io.open(tempOutputFile, "r")
+  if file then
+    output = file:read("*a") or ""
+    file:close()
+    LrFileUtils.delete(tempOutputFile)
   end
 
   logger:trace(string.format("analyzeWithPython exit=%d, len=%d", exitCode, #output))
   logger:trace("analyzeWithPython output: " .. string.sub(output, 1, 3000))
 
   if exitCode ~= 0 then
-    local failedPath = (exitCode == 32512 or exitCode == 126 or exitCode == 127) and exePath or scriptPath
-    local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", failedPath or "未知", exitCode)
+    local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", exePath, exitCode)
     if #output > 0 then err = err .. ": " .. string.sub(output, 1, 2000) end
     return nil, err
   end
