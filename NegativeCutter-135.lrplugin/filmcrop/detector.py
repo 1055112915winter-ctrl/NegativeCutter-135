@@ -176,15 +176,25 @@ def _load_dng_subifd(path: str) -> np.ndarray:
 
 
 def _load_raw_dng_array(path: str, contrast_enhance: bool = True) -> tuple[np.ndarray, str]:
-    """Load DNG RAW data, trying native SubIFD parser first, then Pillow fallback."""
-    # 1. Native SubIFD parser (pure Python, no external deps)
+    """Load DNG RAW data, trying rawpy first, then native SubIFD, then Pillow fallback."""
+    # 1. rawpy (best quality, widest camera support)
+    try:
+        import rawpy  # type: ignore
+
+        with rawpy.imread(path) as raw:
+            arr = np.array(raw.raw_image_visible)
+        return _stretch_uint8(arr, contrast_enhance), "rawpy"
+    except Exception:
+        pass
+
+    # 2. Native SubIFD parser (pure Python, no external deps)
     try:
         arr = _load_dng_subifd(path)
         return _stretch_uint8(arr, contrast_enhance), "subifd"
     except Exception:
         pass
 
-    # 2. Pillow (reads only embedded preview; will be rejected by size gate)
+    # 3. Pillow (reads only embedded preview; will be rejected by size gate)
     return _load_pillow_image_array(path, contrast_enhance), "pillow_fallback"
 
 

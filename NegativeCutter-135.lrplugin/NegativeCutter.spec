@@ -26,6 +26,8 @@ a = Analysis(
         'filmcrop.detector',
         'filmcrop.export',
         'filmcrop.api',
+        # rawpy + LibRaw for DNG decoding
+        'rawpy',
         # PIL image plugins (lazy-loaded, must be explicit for PyInstaller)
         'PIL.TiffImagePlugin',
         'PIL.JpegImagePlugin',
