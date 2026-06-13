@@ -182,29 +182,51 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
   end
 
   -- Lightroom 的 LrTasks.execute 对插件路径中的中文/空格处理不稳定，
-  -- 直接把 onedir 包复制到英文临时目录 WORK_DIR 下再执行，避免路径问题。
-  local runtimeExeDir = LrPathUtils.child(WORK_DIR, "NegativeCutter")
+  -- 因此把 onedir 包复制到英文临时目录再执行。
+  -- 为避免中文路径出现在 shell 命令中，先把源路径写入临时文件，
+  -- 再由 Python 读取该文件并执行 shutil.copytree。
+  local runtimeRoot = LrPathUtils.child(LrPathUtils.getStandardFilePath("home"), "NegativeCutter_Runtime")
+  local runtimeExeDir = LrPathUtils.child(runtimeRoot, "NegativeCutter")
   local runtimeExePath = LrPathUtils.child(runtimeExeDir, "NegativeCutter")
 
   local function ensureRuntimeBundle()
     if fileExists(runtimeExePath) then
       return true
     end
-    -- 清理旧副本（如果有）
-    if LrFileUtils.exists(runtimeExeDir) then
-      local rmCmd = string.format('rm -rf %s', shellEscape(runtimeExeDir))
-      LrTasks.execute(rmCmd)
-    end
-    -- 用 cp -R 复制整个 onedir 目录
-    local cpCmd = string.format('cp -R %s %s', shellEscape(localExeDir), shellEscape(runtimeExeDir))
-    local cpExit = LrTasks.execute(cpCmd)
-    if cpExit ~= 0 then
-      logger:error("复制引擎到临时目录失败: " .. cpCmd)
+
+    -- 把源路径写入英文临时文件，避免 shell 命令中出现中文
+    local srcListFile = LrPathUtils.child(WORK_DIR, "engine_src.txt")
+    local f = io.open(srcListFile, "w")
+    if not f then
+      logger:error("无法写入源路径文件: " .. srcListFile)
       return false
     end
+    f:write(localExeDir)
+    f:close()
+
+    -- 用 Python 复制整个 onedir 目录；命令字符串只包含英文路径
+    -- 源路径通过临时文件传递，避免中文路径出现在 shell 命令中
+    local pyPath = ProcessAgent.findPythonPath()
+    local pyCopyCmd = string.format(
+      "%s -c \"import shutil, os; src=open('%s').read().strip(); dst='%s'; shutil.rmtree(dst, ignore_errors=True); shutil.copytree(src, dst)\"",
+      shellEscape(pyPath),
+      srcListFile,
+      runtimeExeDir
+    )
+    logger:trace("复制引擎到临时目录: " .. pyCopyCmd)
+    local cpExit = LrTasks.execute(pyCopyCmd)
+    if cpExit ~= 0 then
+      logger:error("复制引擎到临时目录失败，exit=" .. tostring(cpExit))
+      return false
+    end
+
     -- 确保可执行权限
     local chmodCmd = string.format('chmod +x %s', shellEscape(runtimeExePath))
     LrTasks.execute(chmodCmd)
+
+    -- 复制完成后删除源路径文件
+    pcall(function() LrFileUtils.delete(srcListFile) end)
+
     return fileExists(runtimeExePath)
   end
 
