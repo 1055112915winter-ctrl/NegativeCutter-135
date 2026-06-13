@@ -57,6 +57,9 @@ NegativeCutter-135.lrplugin/filmcrop/gui/
 release/
 *.zip
 
+# Marketing content
+marketing/
+
 # Secrets
 .env
 .env.*
