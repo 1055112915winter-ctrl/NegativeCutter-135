@@ -44,14 +44,25 @@ rm -f "$OUTPUT_ZIP"
 echo "==> 运行 PyInstaller..."
 python3 -m PyInstaller NegativeCutter.spec
 
-# 3. 检查可执行文件是否生成
-EXE_PATH="dist/NegativeCutter/NegativeCutter"
-if [[ ! -x "$EXE_PATH" ]]; then
-  echo "ERROR: 可执行文件未生成: $EXE_PATH" >&2
+# 3. 检查可执行文件是否生成并复制到插件根目录
+# PyInstaller 输出可能是 onedir 的 dist/NegativeCutter/NegativeCutter，
+# 也可能是单个文件 dist/NegativeCutter，这里同时兼容两种情况。
+EXE_SRC=""
+if [[ -x "dist/NegativeCutter/NegativeCutter" ]]; then
+  EXE_SRC="dist/NegativeCutter/NegativeCutter"
+elif [[ -x "dist/NegativeCutter" ]]; then
+  EXE_SRC="dist/NegativeCutter"
+fi
+
+if [[ -z "$EXE_SRC" ]]; then
+  echo "ERROR: 可执行文件未生成于 dist/NegativeCutter" >&2
   exit 1
 fi
 
-echo "==> 可执行文件生成成功: $EXE_PATH"
+echo "==> 可执行文件生成成功: $EXE_SRC"
+echo "==> 复制可执行文件到插件根目录..."
+cp -f "$EXE_SRC" "./NegativeCutter"
+chmod +x "./NegativeCutter"
 
 # 4. 清理 Python 字节码缓存，避免打包进 zip
 echo "==> 清理 __pycache__..."
