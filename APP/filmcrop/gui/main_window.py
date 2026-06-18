@@ -50,6 +50,7 @@ from filmcrop.gui.frame_item import MIN_FRAME_SIZE
 from filmcrop.gui.image_view import ImageView
 from filmcrop.gui.export_dialog import ExportDialog
 from filmcrop.gui.logo import create_app_icon, create_header_logo_pixmap
+from filmcrop import __version__
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -97,7 +98,7 @@ def _bit_depth_from_image(img) -> int:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NegativeCutter")
+        self.setWindowTitle(f"NegativeCutter v{__version__}")
         self.setMinimumSize(1280, 900)
         self.setWindowIcon(create_app_icon())
 
@@ -421,7 +422,7 @@ class MainWindow(QMainWindow):
     def _build_statusbar(self):
         self._status = QStatusBar()
         self.setStatusBar(self._status)
-        self._status.showMessage("就绪 – 请打开扫描图像文件")
+        self._status.showMessage(f"NegativeCutter v{__version__} — 就绪，请打开扫描图像文件")
 
     def _build_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+D"), self, activated=self._on_detect)
@@ -618,6 +619,7 @@ class MainWindow(QMainWindow):
             self._status.showMessage(f"检测失败: {e}")
             QMessageBox.critical(
                 self, "检测失败",
+                f"NegativeCutter v{__version__}\n\n"
                 f"帧检测过程中发生错误:\n\n{str(e)}\n\n{tb}"
             )
             return
@@ -909,7 +911,7 @@ class MainWindow(QMainWindow):
 
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "2.4.4",
+            "version": __version__,
             "image_width": self._img_w,
             "image_height": self._img_h,
             "is_horizontal": self._is_horizontal,
@@ -956,6 +958,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "FastAPI 未安装",
+                f"NegativeCutter v{__version__}\n\n"
                 "无法启动 API 服务器。请安装依赖:\n\npip install fastapi uvicorn",
             )
             return
@@ -1078,7 +1081,10 @@ class MainWindow(QMainWindow):
                 on_frame=_on_frame,
             )
         except Exception as e:
-            QMessageBox.warning(self, "导出失败", f"图像导出失败: {e}")
+            QMessageBox.warning(
+                self, "导出失败",
+                f"NegativeCutter v{__version__}\n\n图像导出失败: {e}"
+            )
 
         progress.setValue(len(self._frames))
         self._status.showMessage(f"已导出 {len(paths)} 张图像到 {out_dir}")

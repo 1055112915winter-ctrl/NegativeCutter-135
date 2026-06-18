@@ -9,9 +9,25 @@ SPEC="${APP_DIR}/NegativeCutter.spec"
 ICON="${APP_DIR}/NegativeCutter.icns"
 TARGET_ARCH=""
 
+VERSION=$(python3 - "${APP_DIR}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from filmcrop import __version__
+print(__version__)
+PY
+)
+
 usage() {
-    echo "Usage: $(basename "$0") [--target-arch universal2|x86_64|arm64]"
-    exit 1
+    cat <<EOF
+Usage: $(basename "$0") [--target-arch universal2|x86_64|arm64]
+
+Build NegativeCutter macOS .app bundle.
+
+Options:
+  --target-arch  Target architecture (universal2, x86_64, arm64)
+  --version      Print version and exit
+  -h, --help     Show this help
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
@@ -20,15 +36,22 @@ while [[ $# -gt 0 ]]; do
             TARGET_ARCH="${2:-}"
             shift 2
             ;;
+        --version)
+            echo "NegativeCutter v${VERSION}"
+            exit 0
+            ;;
         -h|--help)
             usage
             ;;
         *)
-            echo "Unknown option: $1"
-            usage
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
             ;;
     esac
 done
+
+echo "==> Building NegativeCutter v${VERSION}"
 
 # Validate target-arch if requested for universal2
 if [[ "$TARGET_ARCH" == "universal2" ]]; then
@@ -71,7 +94,7 @@ fi
 echo "Generating application icon..."
 python3 "${APP_DIR}/generate_icns.py"
 if [[ ! -f "$ICON" ]]; then
-    echo "ERROR: Icon generation failed — $ICON not found"
+    echo "ERROR: Icon generation failed — $ICON not found" >&2
     exit 1
 fi
 
@@ -89,7 +112,7 @@ PYINSTALLER_CONFIG_DIR="$TMP_BASE/pyi_cfg" \
 
 APP_BUNDLE="$TMP_BASE/pyi_dist/NegativeCutter.app"
 if [[ ! -d "$APP_BUNDLE" ]]; then
-    echo "ERROR: Build failed — $APP_BUNDLE not found"
+    echo "ERROR: Build failed — $APP_BUNDLE not found" >&2
     rm -rf "$TMP_BASE"
     exit 1
 fi
@@ -111,8 +134,9 @@ cp -R "$APP_BUNDLE" "$DEST"
 rm -rf "$TMP_BASE"
 
 echo ""
-echo "Build complete: $DEST"
+echo "Build complete: NegativeCutter v${VERSION} → $DEST"
 echo ""
 echo "To distribute:"
-echo "  1. Right-click the app and select 'Open' on first launch"
-echo "  2. Or use scripts/sign_app.sh for detailed signing options"
+echo "  zip -r -y NegativeCutter-v${VERSION}-macOS-${TARGET_ARCH:-arm64}.zip NegativeCutter.app"
+echo ""
+echo "  First-launch note: right-click → Open (Gatekeeper)"

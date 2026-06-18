@@ -9,14 +9,23 @@ BUILD_SCRIPT="${APP_DIR}/scripts/build_app.sh"
 APP_BUNDLE="${APP_DIR}/NegativeCutter.app"
 BUILD_ARGS=()
 
+VERSION=$(python3 - "${APP_DIR}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from filmcrop import __version__
+print(__version__)
+PY
+)
+
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [--target-arch universal2|x86_64|arm64]
 
-Runs the GUI tests, rebuilds APP/NegativeCutter.app, and verifies its signature.
+Run GUI tests, rebuild NegativeCutter.app, and verify its signature.
 
 Options:
   --target-arch  Forward the target architecture to build_app.sh
+  --version      Print version and exit
   -h, --help     Show this help
 EOF
 }
@@ -35,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             usage
             exit 0
             ;;
+        --version)
+            echo "NegativeCutter v${VERSION}"
+            exit 0
+            ;;
         *)
             echo "ERROR: Unknown option: $1" >&2
             usage >&2
@@ -43,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+echo "==> NegativeCutter v${VERSION} package verification"
 echo "==> Running GUI tests"
 cd "$REPO_ROOT"
 QT_QPA_PLATFORM=offscreen python3 -m unittest discover \
@@ -65,4 +79,4 @@ fi
 echo "==> Verifying application signature"
 codesign --verify --deep --strict "$APP_BUNDLE"
 
-echo "==> Package ready: $APP_BUNDLE"
+echo "==> Package ready: NegativeCutter v${VERSION} → $APP_BUNDLE"

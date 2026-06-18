@@ -9,6 +9,9 @@ BUILD_SCRIPT = ROOT / "APP/scripts/build_app.sh"
 SPEC = ROOT / "APP/NegativeCutter.spec"
 
 
+VER = "2.4.5"
+
+
 class PackageAppScriptTest(unittest.TestCase):
     def test_script_exposes_expected_cli(self):
         self.assertTrue(SCRIPT.is_file())
@@ -22,7 +25,14 @@ class PackageAppScriptTest(unittest.TestCase):
         )
 
         self.assertIn("--target-arch", result.stdout)
+        self.assertIn("--version", result.stdout)
         self.assertNotIn("--no-open", result.stdout)
+
+    def test_build_script_exposes_version_flag(self):
+        source = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--version", source)
+        self.assertIn("VERSION=$(python3", source)
+        self.assertIn("from filmcrop import __version__", source)
 
     def test_script_builds_without_launching_application(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -37,6 +47,12 @@ class PackageAppScriptTest(unittest.TestCase):
         self.assertIn("set -euo pipefail", source)
         self.assertIn('if [[ ${#BUILD_ARGS[@]} -gt 0 ]]', source)
         self.assertNotIn('open "$APP_BUNDLE"', source)
+
+    def test_main_window_displays_version(self):
+        mw = ROOT / "APP/filmcrop/gui/main_window.py"
+        source = mw.read_text(encoding="utf-8")
+        self.assertIn("from filmcrop import __version__", source)
+        self.assertIn('"NegativeCutter v{__version__}"', source)
 
     def test_build_generates_canonical_icon_before_pyinstaller(self):
         source = BUILD_SCRIPT.read_text(encoding="utf-8")
