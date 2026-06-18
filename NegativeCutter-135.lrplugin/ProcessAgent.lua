@@ -145,11 +145,11 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
 
   -- 仅使用 PyInstaller onedir 打包的 NegativeCutter 可执行文件。
   -- 如果它无法执行，直接报错，不 fallback 到 Python 脚本，避免掩盖环境问题。
-  local localExeDir = LrPathUtils.child(pluginPath, "NegativeCutter")
-  local localExePath = LrPathUtils.child(localExeDir, "NegativeCutter")
+  local onedirSource = LrPathUtils.child(pluginPath, "NegativeCutter")
+  local localExePath = LrPathUtils.child(onedirSource, "NegativeCutter")
   if not fileExists(localExePath) then
     localExePath = LrPathUtils.child(pluginPath, "NegativeCutter")
-    localExeDir = pluginPath
+    onedirSource = nil  -- onefile 模式，无 onedir 目录可复制
   end
 
   if not fileExists(localExePath) then
@@ -172,89 +172,23 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     if type(s) ~= "string" then
       return '""'
     end
+    -- Lua 模式匹配中 $ 是特殊字符（字符串末尾锚点），匹配字面 $ 必须用 %$。
+    -- 原 :gsub('$', '\\$') 会在所有字符串末尾插入 \\$，导致路径末尾多出一个 $，
+    -- 在 shell 中执行时提示 "No such file or directory"（退出码 127 / 32512）。
     return '"' .. s
       :gsub('\\', '\\\\')
       :gsub('"', '\\"')
-      :gsub('$', '\\$')
+      :gsub('%$', '\\$')
       :gsub('`', '\\`')
       :gsub('\n', '\\n')
       .. '"'
   end
 
-  -- Lightroom 的 LrTasks.execute 对插件路径中的中文/空格处理不稳定，
-  -- 因此把 onedir 包复制到英文临时目录再执行。
-  -- 这里使用 LrFileUtils.copy 逐文件复制（通过构建时生成的 manifest.txt），
-  -- 完全避免在 shell 命令中传递中文路径。
-  local runtimeRoot = LrPathUtils.child(LrPathUtils.getStandardFilePath("home"), "NegativeCutter_Runtime")
-  local runtimeExeDir = LrPathUtils.child(runtimeRoot, "NegativeCutter")
-  local runtimeExePath = LrPathUtils.child(runtimeExeDir, "NegativeCutter")
-
-  local function copyFileWithDirs(srcFile, dstFile)
-    local dstDir = LrPathUtils.parent(dstFile)
-    if not LrFileUtils.exists(dstDir) then
-      LrFileUtils.createAllDirectories(dstDir)
-    end
-    LrFileUtils.copy(srcFile, dstFile)
-  end
-
-  local function ensureRuntimeBundle()
-    if fileExists(runtimeExePath) then
-      return true
-    end
-
-    -- 清理旧副本
-    if LrFileUtils.exists(runtimeExeDir) then
-      LrFileUtils.delete(runtimeExeDir)
-    end
-
-    local manifestPath = LrPathUtils.child(localExeDir, "manifest.txt")
-    if not LrFileUtils.exists(manifestPath) then
-      logger:error("缺少 manifest.txt，无法复制引擎: " .. manifestPath)
-      return false
-    end
-
-    local manifestFile = io.open(manifestPath, "r")
-    if not manifestFile then
-      logger:error("无法读取 manifest.txt: " .. manifestPath)
-      return false
-    end
-
-    local copyCount = 0
-    for line in manifestFile:lines() do
-      local relPath = line:match("^%./(.+)$")
-      if relPath and relPath ~= "manifest.txt" then
-        local srcFile = LrPathUtils.child(localExeDir, relPath)
-        local dstFile = LrPathUtils.child(runtimeExeDir, relPath)
-        local ok, copyErr = pcall(function()
-          copyFileWithDirs(srcFile, dstFile)
-        end)
-        if not ok then
-          manifestFile:close()
-          logger:error(string.format("复制文件失败: %s -> %s: %s", srcFile, dstFile, tostring(copyErr)))
-          return false
-        end
-        copyCount = copyCount + 1
-      end
-    end
-    manifestFile:close()
-
-    logger:trace(string.format("已复制 %d 个引擎文件到 %s", copyCount, runtimeExeDir))
-
-    -- 确保可执行权限
-    local chmodCmd = string.format('chmod +x %s', shellEscape(runtimeExePath))
-    LrTasks.execute(chmodCmd)
-
-    return fileExists(runtimeExePath)
-  end
-
-  local ok, ensureErr = pcall(ensureRuntimeBundle)
-  if not ok or not ensureErr then
-    logger:error("检测引擎准备失败: " .. tostring(ensureErr))
-    return nil, "检测引擎准备失败: 无法复制到临时目录"
-  end
-
-  local exePath = runtimeExePath
-  logger:trace("使用临时目录引擎: " .. exePath)
+  -- 直接在插件目录内执行 PyInstaller onedir 可执行文件。
+  -- shellEscape 已修复（Lua 模式 %$ 匹配字面 $），中文/空格路径可安全传递。
+  -- 不再复制到临时目录：逐文件 LrFileUtils.copy 对 Mach-O/.dylib 等文件不可靠。
+  local exePath = localExePath
+  logger:trace("使用插件目录引擎: " .. exePath)
 
   local cmd = string.format('%s %s --frames %d --cleanup-scale 0.50',
     shellEscape(exePath), shellEscape(inputPath), expectedFrames)
@@ -288,9 +222,67 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
   logger:trace("analyzeWithPython output: " .. string.sub(output, 1, 3000))
 
   if exitCode ~= 0 then
-    local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", exePath, exitCode)
-    if #output > 0 then err = err .. ": " .. string.sub(output, 1, 2000) end
-    return nil, err
+    -- 系统级执行失败检测。以下信号表明 shell/OS/dyld 阻止了执行，而非
+    -- Python 检测逻辑错误。对这类失败尝试 cp -R 到临时目录后重试。
+    --
+    -- 32512 = 127 << 8（shell "command not found" 或 dyld 加载失败）。
+    -- exitCode <= 31 通常是进程被信号杀死（SIGKILL=9、SIGBUS=10、
+    -- SIGSEGV=11 等），常见于 macOS Gatekeeper/SIP 干预。
+    --
+    -- 额外检查输出中是否包含已知系统错误关键词，覆盖退出码不标准但
+    -- 同样是 OS 层阻止的情况。
+    local isSystemFailure = (
+      exitCode == 32512 or
+      (exitCode >= 1 and exitCode <= 31)
+    )
+    if not isSystemFailure and #output > 0 then
+      local lowerOutput = string.lower(output)
+      isSystemFailure = (
+        lowerOutput:find("dyld") ~= nil or
+        lowerOutput:find("library not loaded") ~= nil or
+        lowerOutput:find("operation not permitted") ~= nil or
+        lowerOutput:find("killed") ~= nil or
+        lowerOutput:find("command not found") ~= nil or
+        lowerOutput:find("cannot execute") ~= nil or
+        lowerOutput:find("bad cpu type") ~= nil or
+        lowerOutput:find("no such file") ~= nil or
+        lowerOutput:find("permission denied") ~= nil or
+        lowerOutput:find("code signing") ~= nil or
+        lowerOutput:find("terminated") ~= nil
+      )
+    end
+
+    if isSystemFailure and onedirSource then
+      local runtimeRoot = LrPathUtils.child(LrPathUtils.getStandardFilePath("temp"), "NegativeCutter_Runtime")
+      local runtimeExeDir = LrPathUtils.child(runtimeRoot, "NegativeCutter")
+      local runtimeExePath = LrPathUtils.child(runtimeExeDir, "NegativeCutter")
+
+      logger:error(string.format("引擎执行失败 (exit=%d)，尝试 cp -R 到 %s 后重试", exitCode, runtimeExeDir))
+      LrTasks.execute(string.format('rm -rf %s', shellEscape(runtimeRoot)))
+      local cpCmd = string.format('cp -RL %s %s',
+        shellEscape(onedirSource), shellEscape(runtimeExeDir))
+      local cpExit = LrTasks.execute(cpCmd)
+      if cpExit == 0 then
+        LrTasks.execute(string.format('chmod +x %s', shellEscape(runtimeExePath)))
+        local retryCmd = cmd .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
+        exitCode = LrTasks.execute(retryCmd)
+        local retryFile = io.open(tempOutputFile, "r")
+        if retryFile then
+          output = retryFile:read("*a") or ""
+          retryFile:close()
+          LrFileUtils.delete(tempOutputFile)
+        end
+        logger:trace(string.format("analyzeWithPython cp-R retry exit=%d, len=%d", exitCode, #output))
+      else
+        logger:error(string.format("cp -R 复制失败 (退出码 %d)，无法重试", cpExit))
+      end
+    end
+
+    if exitCode ~= 0 then
+      local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", exePath, exitCode)
+      if #output > 0 then err = err .. ": " .. string.sub(output, 1, 2000) end
+      return nil, err
+    end
   end
 
   if #output == 0 then

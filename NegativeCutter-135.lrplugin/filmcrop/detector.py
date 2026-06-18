@@ -1650,7 +1650,11 @@ def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
         quality_penalty = max(0.0, 0.15 - mean_quality) * 5.0
         min_quality_penalty = max(0.0, 0.20 - min_quality) * 3.0
         # Very narrow gaps are usually detection artefacts, not real sprocket holes.
-        min_gap_width = max(15, int(scan_size / ef * 0.003))
+        # Real inter-frame gaps are materially wider than the repeated narrow
+        # texture peaks produced by over-segmenting a strip. One percent of
+        # the candidate pitch is deliberately conservative for 35 mm film,
+        # while rejecting raw0014's artificial 28 px gaps in the 8-frame fit.
+        min_gap_width = max(15, int(scan_size / ef * 0.01))
         narrow_penalty = sum(1 for le, re in chosen_edges if re - le < min_gap_width) * 1.5
         score = chosen_var * (1.0 + cv_penalty + fallback_penalty + quality_penalty + min_quality_penalty + narrow_penalty)
         if score < best_score:

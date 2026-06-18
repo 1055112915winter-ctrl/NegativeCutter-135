@@ -48,6 +48,10 @@ NegativeCutter-135.lrplugin/detect_debug.log
 
 # Tests and dev scripts inside plugin
 NegativeCutter-135.lrplugin/tests/
+!NegativeCutter-135.lrplugin/tests/
+NegativeCutter-135.lrplugin/tests/*
+!NegativeCutter-135.lrplugin/tests/test_auto_frame_detection.py
+!NegativeCutter-135.lrplugin/tests/test_plugin_hardening.py
 NegativeCutter-135.lrplugin/scripts/
 NegativeCutter-135.lrplugin/CLAUDE.md
 NegativeCutter-135.lrplugin/debug_visualize.py

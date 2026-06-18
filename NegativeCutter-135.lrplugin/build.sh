@@ -63,13 +63,11 @@ fi
 echo "==> 可执行文件生成成功: $EXE_DIR"
 echo "==> 复制可执行文件到插件根目录..."
 rm -rf "./NegativeCutter"
-cp -R "$EXE_DIR" "./NegativeCutter"
+# -L 强制跟随符号链接：PyInstaller onedir 在 macOS 上会对 Python.framework 等使用
+# 符号链接，但 macOS 的代码签名和安全策略可能对符号链接有额外限制；确保插件内是
+# 普通文件/目录。
+cp -RL "$EXE_DIR" "./NegativeCutter"
 chmod +x "./NegativeCutter/NegativeCutter"
-
-# 4.1 生成 manifest.txt，供 ProcessAgent.lua 在 Lightroom 内用 LrFileUtils.copy 复制 onedir 目录。
-# 避免使用 shell 命令处理中文路径。
-echo "==> 生成引擎文件清单..."
-(cd "./NegativeCutter" && find . -type f > manifest.txt)
 
 # 4. 清理 Python 字节码缓存，避免打包进 zip
 echo "==> 清理 __pycache__..."
@@ -79,7 +77,9 @@ find . -type f -name '*.pyo' -delete 2>/dev/null || true
 
 # 5. 打包（注意：不要把 dist/ 和 build/ 打进 zip）
 echo "==> 打包插件..."
-TMP_PACKAGE_DIR=$(mktemp -d)
+TMP_PACKAGE_DIR="${TMPDIR:-/tmp}/filmcrop-build-$$"
+rm -rf "$TMP_PACKAGE_DIR"
+mkdir -p "$TMP_PACKAGE_DIR"
 trap 'rm -rf "$TMP_PACKAGE_DIR"' EXIT
 
 # 复制插件目录到临时目录，并剔除开发/构建产物
@@ -89,6 +89,29 @@ rm -rf build dist __pycache__ .DS_Store
 find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find . -type f -name '*.pyc' -delete 2>/dev/null || true
 find . -type f -name '*.pyo' -delete 2>/dev/null || true
+
+# A dirty source tree must never leak development artifacts into a release.
+forbidden=$(find . \
+  \( -name tests -o -name WORK -o -name CLAUDE.md -o \
+     -name debug_visualize.py -o -name detect_debug.log \) -print)
+if [[ -n "$forbidden" ]]; then
+  echo "ERROR: forbidden development artifacts remain in release stage:" >&2
+  echo "$forbidden" >&2
+  exit 1
+fi
+
+# Every Lightroom menu entry must resolve inside the staged plugin.
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+root = Path('.')
+info = (root / 'Info.lua').read_text(encoding='utf-8')
+missing = [p for p in re.findall(r'''file\s*=\s*["']([^"']+)["']''', info)
+           if not (root / p).is_file()]
+if missing:
+    raise SystemExit('ERROR: Info.lua references missing files: ' + ', '.join(missing))
+PY
 
 # 6. 生成 zip
 cd "$TMP_PACKAGE_DIR"
