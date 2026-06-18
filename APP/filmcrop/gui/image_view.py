@@ -193,16 +193,10 @@ class ImageView(QGraphicsView):
     # ------------------------------------------------------------------ #
 
     def wheelEvent(self, event):
-        # Trackpad two-finger drag → pan (has pixelDelta + scroll phase)
+        # Trackpad two-finger drag → delegate to QGraphicsView native pan
         pixel = event.pixelDelta()
         if not pixel.isNull():
-            h_bar = self.horizontalScrollBar()
-            v_bar = self.verticalScrollBar()
-            if h_bar is not None:
-                h_bar.setValue(h_bar.value() + pixel.x())
-            if v_bar is not None:
-                v_bar.setValue(v_bar.value() + pixel.y())
-            event.accept()
+            super().wheelEvent(event)
             return
 
         # Mouse wheel or trackpad pinch → zoom
