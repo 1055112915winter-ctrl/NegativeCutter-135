@@ -60,7 +60,6 @@ class ImageView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
-        self._last_pinch_value = 1.0
 
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
@@ -221,64 +220,8 @@ class ImageView(QGraphicsView):
             label.setPos(frame["left"] + 4, frame["top"] + 4)
 
     # ------------------------------------------------------------------ #
-    # Zoom / Pan
+    # Zoom
     # ------------------------------------------------------------------ #
-
-    def event(self, event):
-        import PyQt6.QtCore as _QtCore
-        from PyQt6.QtGui import QNativeGestureEvent
-
-        if isinstance(event, QNativeGestureEvent):
-            gesture_type = event.gestureType()
-            if gesture_type == _QtCore.Qt.NativeGestureType.ZoomNativeGesture:
-                self._apply_pinch(event.value())
-                event.accept()
-                return True
-            elif gesture_type == _QtCore.Qt.NativeGestureType.BeginNativeGesture:
-                self._last_pinch_value = 1.0
-                event.accept()
-                return True
-            elif gesture_type == _QtCore.Qt.NativeGestureType.EndNativeGesture:
-                event.accept()
-                return True
-        return super().event(event)
-
-    def wheelEvent(self, event):
-        # Mouse wheel → zoom.  Trackpad scroll events carry a scroll phase;
-        # they are handled by ScrollHandDrag (two-finger pan) and the native
-        # gesture path (pinch), so reject them here — otherwise momentum
-        # tail events would be mistaken for mouse-wheel zoom.
-        if event.phase() != Qt.ScrollPhase.NoScrollPhase:
-            event.accept()
-            return
-
-        delta = event.angleDelta().y()
-        if delta == 0:
-            event.accept()
-            return
-        factor = 1.15 if delta > 0 else 1 / 1.15
-        self._apply_zoom_factor(factor)
-        event.accept()
-
-    def _apply_pinch(self, value: float):
-        """Apply a pinch magnification step.
-
-        On macOS the *value* is the absolute magnification since the gesture
-        began (1.0 = original size).  We compute the incremental factor
-        relative to the previous value and hand it off to the shared zoom
-        path so clamping and _zoom bookkeeping stay in one place.
-        """
-        prev = self._last_pinch_value
-        self._last_pinch_value = value
-        if prev > 0.001:
-            factor = value / prev
-        else:
-            factor = value
-        if abs(factor - 1.0) < 0.002:
-            return
-        if factor <= 0:
-            return
-        self._apply_zoom_factor(factor)
 
     def _apply_zoom_factor(self, factor: float):
         new_zoom = self._zoom * factor
