@@ -2,6 +2,26 @@
 
 > 2026-06-11 起始，2026-06-18 增量更新 · 当前独立桌面版 handoff。包含 PyInstaller onedir、签名、GUI 美化、一键打包入口，以及 16-bit 多通道图像显示修复。
 
+## 2026-06-18 macOS 应用图标统一增量
+
+- 修复截图中 Finder/Get Info 仍显示旧胶片框+斜线图标的问题。
+- 根因不是新版设计缺失：`logo.py` 与 `generate_icns.py` 已是对称菱形/镜头标记，但 `APP/NegativeCutter.icns` 不存在，spec 静默从旧 `.claude/worktrees/` 取到了过期 ICNS。
+- 当前构建契约：
+  - `APP/scripts/build_app.sh` 在 PyInstaller 前强制运行 `generate_icns.py`
+  - 生成后检查 `APP/NegativeCutter.icns` 必须存在
+  - `APP/NegativeCutter.spec` 只接受本地 canonical ICNS；缺失时直接失败，不再跨 worktree 回退
+- 已生成并纳入源码的 canonical `APP/NegativeCutter.icns`：对称双菱形、中心镜头、深色圆角底板，无旧斜线或胶片孔。
+- TDD 证据：新增打包契约先失败于“构建未生成图标”和“spec 仍有 worktree 回退”，最小实现后 `4/4` 通过。
+- Fresh 验证：
+  - GUI 测试 `23/23` 通过
+  - package contract `4/4` 通过
+  - `APP/scripts/package_app.sh` fresh rebuild 通过
+  - 源 ICNS 与 `.app` 内 ICNS SHA-256 均为 `2c3bcb30d409ffad4283ba0ec8b73b34a6b0d9582cdedbfbe5613d09f0ae7ac0`
+  - `CFBundleIconFile` 为 `NegativeCutter.icns`
+  - `codesign --verify --deep --strict` 通过
+  - 最新 `.app` 时间戳：`2026-06-18 22:37:10`
+- Finder 可能短暂显示系统缓存的旧缩略图；bundle 实际资源已替换，Quick Look 对 source/bundle ICNS 的渲染均确认是新版图标。
+
 ## 2026-06-18 sRGB ICC 与无损裁切导出增量
 
 - DNG 解码现显式使用 `rawpy.ColorSpace.sRGB` 与 `output_bps=16`；对 `raw0014.dng`，显式参数与此前默认参数生成的 16-bit 数组已验证完全一致，因此没有新增像素转换。

@@ -6,6 +6,7 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SPEC="${APP_DIR}/NegativeCutter.spec"
+ICON="${APP_DIR}/NegativeCutter.icns"
 TARGET_ARCH=""
 
 usage() {
@@ -63,6 +64,15 @@ if [[ -n "$TARGET_ARCH" ]]; then
     echo "Building for architecture: $TARGET_ARCH"
 else
     echo "Building for default architecture ($(python3 -c 'import platform; print(platform.machine())'))"
+fi
+
+# Generate the canonical icon beside the spec. The spec intentionally has no
+# cross-worktree fallback, so stale assets cannot enter the bundle.
+echo "Generating application icon..."
+python3 "${APP_DIR}/generate_icns.py"
+if [[ ! -f "$ICON" ]]; then
+    echo "ERROR: Icon generation failed — $ICON not found"
+    exit 1
 fi
 
 # Run PyInstaller with isolated temp directories to avoid worktree sandbox issues

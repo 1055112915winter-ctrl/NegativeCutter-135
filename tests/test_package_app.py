@@ -5,6 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "APP/scripts/package_app.sh"
+BUILD_SCRIPT = ROOT / "APP/scripts/build_app.sh"
+SPEC = ROOT / "APP/NegativeCutter.spec"
 
 
 class PackageAppScriptTest(unittest.TestCase):
@@ -35,6 +37,25 @@ class PackageAppScriptTest(unittest.TestCase):
         self.assertIn("set -euo pipefail", source)
         self.assertIn('if [[ ${#BUILD_ARGS[@]} -gt 0 ]]', source)
         self.assertNotIn('open "$APP_BUNDLE"', source)
+
+    def test_build_generates_canonical_icon_before_pyinstaller(self):
+        source = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('python3 "${APP_DIR}/generate_icns.py"', source)
+        generate_pos = source.index('python3 "${APP_DIR}/generate_icns.py"')
+        pyinstaller_pos = source.index("python3 -m PyInstaller")
+
+        self.assertLess(generate_pos, pyinstaller_pos)
+        self.assertIn('ICON="${APP_DIR}/NegativeCutter.icns"', source)
+        self.assertIn('if [[ ! -f "$ICON" ]]', source)
+
+    def test_spec_requires_local_icon_without_worktree_fallback(self):
+        source = SPEC.read_text(encoding="utf-8")
+
+        self.assertIn("os.path.join(app_dir, 'NegativeCutter.icns')", source)
+        self.assertIn("raise FileNotFoundError", source)
+        self.assertNotIn(".claude", source)
+        self.assertNotIn("worktrees", source)
 
 
 if __name__ == "__main__":

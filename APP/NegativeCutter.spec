@@ -13,14 +13,13 @@ app_dir = spec_dir
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
 
-# Locate app icon (.icns) — in app_dir or current worktree
-_icon_candidates = [os.path.join(app_dir, 'NegativeCutter.icns')]
-_repo = os.path.dirname(app_dir)
-_worktree_dir = os.path.join(_repo, '.claude', 'worktrees')
-if os.path.isdir(_worktree_dir):
-    for _wt in os.listdir(_worktree_dir):
-        _icon_candidates.append(os.path.join(_worktree_dir, _wt, 'NegativeCutter.icns'))
-_icon_path = next((p for p in _icon_candidates if os.path.exists(p)), None)
+# Use only the canonical icon generated beside this spec. Never fall back to
+# another worktree, where a stale brand asset could be selected silently.
+_icon_path = os.path.join(app_dir, 'NegativeCutter.icns')
+if not os.path.isfile(_icon_path):
+    raise FileNotFoundError(
+        f'Missing application icon: {_icon_path}. Run generate_icns.py first.'
+    )
 
 block_cipher = None
 
