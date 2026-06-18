@@ -44,6 +44,16 @@ def _normalize_16bit_array(arr: np.ndarray) -> Image.Image:
 class ImageView(QGraphicsView):
     """Zoomable/pannable image canvas with draggable frame overlay support."""
 
+    ZOOM_BTN_STYLE = (
+        "QPushButton {"
+        "  background: rgba(40,40,40,180); color: #ddd; border: 1px solid #555;"
+        "  border-radius: 3px; font-size: 14px; font-weight: bold;"
+        "  padding: 2px 8px; min-width: 24px; max-width: 24px; min-height: 22px; max-height: 22px;"
+        "}"
+        "QPushButton:hover { background: rgba(60,60,60,200); border-color: #999; }"
+        "QPushButton:pressed { background: rgba(80,80,80,220); }"
+    )
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -71,6 +81,28 @@ class ImageView(QGraphicsView):
         self._selected_idx = -1
         self._on_frame_changed = None
         self._on_frame_released = None
+
+        # Zoom buttons (bottom-left corner overlay)
+        from PyQt6.QtWidgets import QPushButton  # noqa: re-import for clarity
+
+        self._zoom_in_btn = QPushButton("+", self)
+        self._zoom_in_btn.setStyleSheet(self.ZOOM_BTN_STYLE)
+        self._zoom_in_btn.setToolTip("放大 (] / +)")
+        self._zoom_in_btn.clicked.connect(self.zoom_in)
+
+        self._zoom_out_btn = QPushButton("−", self)
+        self._zoom_out_btn.setStyleSheet(self.ZOOM_BTN_STYLE)
+        self._zoom_out_btn.setToolTip("缩小 ([ / -)")
+        self._zoom_out_btn.clicked.connect(self.zoom_out)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        margin = 8
+        self._zoom_out_btn.move(margin, self.height() - self._zoom_out_btn.height() - margin)
+        self._zoom_in_btn.move(
+            margin + self._zoom_out_btn.width() + 4,
+            self.height() - self._zoom_in_btn.height() - margin,
+        )
 
     # ------------------------------------------------------------------ #
     # Image loading
@@ -192,26 +224,79 @@ class ImageView(QGraphicsView):
     # Zoom
     # ------------------------------------------------------------------ #
 
+    def event(self, event):
+        """Intercept native gesture events (trackpad pinch) before the base class."""
+        import PyQt6.QtCore as _QtCore
+        from PyQt6.QtGui import QNativeGestureEvent
+
+        if isinstance(event, QNativeGestureEvent):
+            gesture_type = event.gestureType()
+            if gesture_type == _QtCore.Qt.NativeGestureType.ZoomNativeGesture:
+                self._apply_pinch(event.value())
+                event.accept()
+                return True
+            elif gesture_type in (
+                _QtCore.Qt.NativeGestureType.BeginNativeGesture,
+                _QtCore.Qt.NativeGestureType.EndNativeGesture,
+            ):
+                if gesture_type == _QtCore.Qt.NativeGestureType.BeginNativeGesture:
+                    self._last_pinch_value = 0.0
+                event.accept()
+                return True
+        return super().event(event)
+
     def wheelEvent(self, event):
-        # Two-finger trackpad scroll → pan (direct view translation,
-        # works even when scrollbars have zero range after fitInView)
+        # Two-finger trackpad scroll → pan
         pixel = event.pixelDelta()
         if not pixel.isNull():
             self.translate(pixel.x(), pixel.y())
             event.accept()
             return
 
-        # Mouse wheel or trackpad pinch → zoom
+        # Mouse wheel → zoom
         delta = event.angleDelta().y()
         if delta == 0:
             event.accept()
             return
         factor = 1.15 if delta > 0 else 1 / 1.15
+        self._apply_zoom_factor(factor)
+        event.accept()
+
+    def _apply_pinch(self, value: float):
+        """Apply a pinch magnification step."""
+        prev = getattr(self, '_last_pinch_value', 0.0)
+        self._last_pinch_value = value
+        delta = value - prev
+        if abs(delta) < 0.001:
+            return
+        factor = 1.0 + delta
+        if factor <= 0:
+            return
+        self._apply_zoom_factor(factor)
+
+    def _apply_zoom_factor(self, factor: float):
         new_zoom = self._zoom * factor
         if self._min_zoom <= new_zoom <= self._max_zoom:
             self._zoom = new_zoom
             self.scale(factor, factor)
-        event.accept()
+
+    def zoom_in(self):
+        self._apply_zoom_factor(1.25)
+
+    def zoom_out(self):
+        self._apply_zoom_factor(1 / 1.25)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_BracketRight:
+            self.zoom_in()
+        elif event.key() == Qt.Key.Key_BracketLeft:
+            self.zoom_out()
+        elif event.key() == Qt.Key.Key_Minus or event.key() == Qt.Key.Key_Underscore:
+            self.zoom_out()
+        elif event.key() == Qt.Key.Key_Equal or event.key() == Qt.Key.Key_Plus:
+            self.zoom_in()
+        else:
+            super().keyPressEvent(event)
 
     # ------------------------------------------------------------------ #
     # Helpers
