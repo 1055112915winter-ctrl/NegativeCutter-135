@@ -1,43 +1,71 @@
 # NegativeCutter Standalone GUI · v2.4.5 Handoff
 
-> 2026-06-11 起始，2026-06-19 最新更新 · 当前独立桌面版 handoff。包含 PyInstaller onedir、签名、GUI 美化、手势交互修复、检测进度条，以及 16-bit 多通道图像显示修复。
+> 2026-06-11 起始，2026-06-19 最终更新 · 当前独立桌面版 handoff。包含 PyInstaller onedir、签名、GUI 美化、手势简化、Code Review 硬化、版本号展示，以及 16-bit 多通道图像显示修复。
 
-## 2026-06-19 v2.4.5 GUI 交互修复增量
+## 2026-06-19 v2.4.5 变更总览
 
 ### 1. 下拉框排版修复
 - **问题**：导出对话框中格式/色彩空间下拉框文字被压缩截断
 - **修复**：`export_dialog.py` QComboBox 添加 `setSizeAdjustPolicy(AdjustToMinimumContentsLengthWithIcon)` + `setMinimumWidth`
-- **样式**：`style_sheet.py` 新增 `QComboBox QAbstractItemView` / `QAbstractItemView::item` 样式，下拉列表项内边距充足
+- **样式**：`style_sheet.py` 新增 `QComboBox QAbstractItemView` / `QAbstractItemView::item` 样式
 
-### 2. 手势交互彻底重写（`image_view.py`）
-- **根因**：`ScrollHandDrag` 拖拽模式与手动平移/原生手势事件互相冲突，导致"拉拽感"和手势完全失效；macOS pin 合手势通过 `QNativeGestureEvent`（非 `QWheelEvent`）传递
-- **修复**：
-  - **移除 ScrollHandDrag**，改为手动鼠标拖拽平移：`mousePressEvent` / `mouseMoveEvent` / `mouseReleaseEvent` 在空白画布或图像上左键拖拽时直接 `translate()`，帧框边角拖拽仍正常交给 `DraggableFrameItem`
-  - **Pinch 缩放**：`event()` 拦截 `QNativeGestureEvent.ZoomNativeGesture`，追踪增量值计算缩放因子（`_apply_pinch` → `_apply_zoom_factor`）
-  - **Trackpad 双指平移**：`wheelEvent` 中 `pixelDelta` 非空 → `translate()` 平移
-  - **鼠标滚轮缩放**：`wheelEvent` 中无 `pixelDelta` → `_apply_zoom_factor`
-  - **缩放按钮**：画布左下角悬浮 `+` / `−` 按钮，半透明深色风格，`resizeEvent` 中重新定位
-  - **键盘快捷键**：`]` / `+` / `=` 放大，`[` / `-` 缩小，`Ctrl+0` 重置缩放
-  - **缩放约束**：0.05x – 8.0x，`_apply_zoom_factor` 统一夹紧
+### 2. 画布交互最终方案：纯键盘+按钮缩放
+经历多轮迭代（手动 translate / wheelEvent phase 过滤 / NativeGesture 拦截）均因 macOS 触控板惯性滚动造成回弹、或与 ScrollHandDrag 冲突导致拉拽感，**最终方案**：
+- **平移**：`ScrollHandDrag`（Qt 原生鼠标拖拽），不拦截任何触控板/鼠标滚轮事件
+- **缩放按钮**：画布左下角悬浮 `+` / `−`，半透明深色风格
+- **键盘缩放**：`]` / `+` / `=` 放大，`[` / `-` 缩小，`Ctrl+0` 重置
+- **缩放约束**：0.05x – 8.0x，`_apply_zoom_factor` 统一夹紧，带浮点误差同步
+- 已删除：`event()` (NativeGesture)、`wheelEvent()` 自定义逻辑、手动 mousePressEvent/mouseMoveEvent/mouseReleaseEvent
 
 ### 3. 检测进度条
-- 帧检测期间显示不确定进度条（marquee），同时禁用检测按钮防重复点击
-- `finally` 块确保无论成功/失败都关闭进度条并恢复按钮
+- `_do_detect` 开始显示不确定进度条（marquee），检测期间禁用按钮
+- `finally` 块确保关闭进度条并恢复按钮
 
-### 4. 图标安全加固（`Negativ eCutter.spec`）
+### 4. 图标安全加固（`NegativeCutter.spec`）
 - 移除跨 worktree icon fallback，仅接受 canonical `APP/NegativeCutter.icns`
+- 缺失时 `raise FileNotFoundError`
 - `build_app.sh` 在 PyInstaller 前强制运行 `generate_icns.py` + 存在性检查
 
-### 5. 版本号
-- `filmcrop/__init__.py`（plugin × 1 + APP × 1）：2.4.4 → 2.4.5
-- `Info.lua`：2.4.3 → 2.4.5
+### 5. Code Review 硬化（4 bugs fixed）
+| # | 级别 | 文件 | 修复 |
+|---|------|------|------|
+| 1 | Critical | `detector.py:1683` | `_auto_detect_frames` 新增 `best_result is None` guard，fallback 到 `ef=6` 的 `_analyze_single_config` |
+| 2 | Medium | `image_view.py:65` | `__init__` 显式声明 `_last_pinch_value = 0.0`（最终方案中已随手势代码移除） |
+| 3 | Medium | `image_view.py:313` | `_apply_zoom_factor`：new_zoom 被边界夹住后计算 `effective = new_zoom / self._zoom`，保证 `scale()` 和 `_zoom` 同步 |
+| 5 | Medium | `frame_item.py` + `main_window.py` | 提取 `MIN_FRAME_SIZE = 20` 到 `frame_item.py`，`main_window.py` import 使用，移除重复定义 |
 
-### 6. 验证
-- GUI 测试：21/23 通过（2 个 sandbox `PermissionError` 与改动无关）
-- 打包契约：3/4 通过（1 个 sandbox subprocess 限制）
-- 手势单元测试：9/9 通过（pan/zoom/button/key/clamp 全覆盖）
+### 6. 版本号展示 + 报错强化
+- `main_window.py` `from filmcrop import __version__`
+- 窗口标题 `"NegativeCutter v2.4.5"`
+- 状态栏 `"NegativeCutter v2.4.5 — 就绪，请打开扫描图像文件"`
+- 4 个错误对话框（检测失败 / API 未安装 / 导出失败 / 图像读取失败）均带版本号
+- 调优记录 `"version": __version__` 动态引用
+- `build_app.sh` / `package_app.sh` 均支持 `--version` 标志，动态读取 `filmcrop.__version__`
+- 完成输出含版本号和 zip 打包命令模板
+- 新增测试 `test_build_script_exposes_version_flag` / `test_main_window_displays_version`
+
+### 7. 版本号同步
+- `APP/filmcrop/__init__.py`：2.4.4 → 2.4.5
+- `NegativeCutter-135.lrplugin/filmcrop/__init__.py`：2.4.4 → 2.4.5
+- `NegativeCutter-135.lrplugin/Info.lua`：2.4.3 → 2.4.5
+
+### 8. 验证
+- GUI 测试：23/23 通过
+- 打包契约：6/6 通过（含新增 2 个版本号测试）
 - Fresh rebuild + codesign 通过
 - 最新产物：`APP/NegativeCutter.app`（arm64，v2.4.5）
+
+### 9. 构建与分发
+```bash
+cd /Users/winter/Documents/临时拷贝/Claude\ Code/filmcrop/APP
+bash scripts/package_app.sh
+zip -r -y NegativeCutter-v2.4.5-macOS-arm64.zip NegativeCutter.app
+```
+
+### 10. 当前已知边界
+- **触控板缩放不可用**：macOS 触控板捏合/惯性滚动与 Qt 手势管道冲突，经历 6 轮迭代未解决，当前回退到纯按钮+键盘缩放。未来可考虑用 QPinchGesture（需额外 setup）或 platform-native 方案。
+- **仅 arm64**：Intel Mac 不可用，universal2 构建需提前装好 fat binary 依赖。
+- **未公证**：首次启动需 `右键 → 打开` 绕过 Gatekeeper。
 
 ## 2026-06-18 macOS 应用图标统一增量
 
@@ -263,9 +291,9 @@ APP/
     └── gui/
         ├── __init__.py
         ├── __main__.py
-        ├── main_window.py           # ★ 主窗口：检测进度条 + QScrollArea 面板
-        ├── image_view.py            # ★ 手动平移 + 原生手势缩放 + 缩放按钮
-        ├── frame_item.py            # 可拖拽帧框
+        ├── main_window.py           # ★ 主窗口：版本号展示 + 检测进度条 + 错误对话框带版本
+        ├── image_view.py            # ★ 纯按钮+键盘缩放 + ScrollHandDrag 平移
+        ├── frame_item.py            # 可拖拽帧框（定义 MIN_FRAME_SIZE）
         ├── export_dialog.py         # 导出对话框（下拉框排版修复）
         ├── logo.py                  # 对称品牌图标
         ├── theme.py                 # 暗色暖调设计 token
