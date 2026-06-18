@@ -56,13 +56,11 @@ class ImageView(QGraphicsView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
-        # Manual pan replaces ScrollHandDrag to avoid gesture conflicts.
-        self._panning = False
-        self._last_pan_pos = None
-        self._last_pinch_value = 0.0
+        self._last_pinch_value = 1.0
 
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
@@ -223,45 +221,10 @@ class ImageView(QGraphicsView):
             label.setPos(frame["left"] + 4, frame["top"] + 4)
 
     # ------------------------------------------------------------------ #
-    # Pan (manual, replaces ScrollHandDrag to avoid gesture conflicts)
-    # ------------------------------------------------------------------ #
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            item = self.itemAt(event.pos())
-            # Pan on empty canvas or pixmap; frame items handled by super
-            if item is None or item is self._pixmap_item:
-                self._panning = True
-                self._last_pan_pos = event.pos()
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._panning and self._last_pan_pos is not None:
-            delta = event.pos() - self._last_pan_pos
-            self._last_pan_pos = event.pos()
-            self.translate(delta.x(), delta.y())
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._panning:
-            self._panning = False
-            self._last_pan_pos = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    # ------------------------------------------------------------------ #
-    # Zoom
+    # Zoom / Pan
     # ------------------------------------------------------------------ #
 
     def event(self, event):
-        """Intercept native gesture events (trackpad pinch) before the base class."""
         import PyQt6.QtCore as _QtCore
         from PyQt6.QtGui import QNativeGestureEvent
 
@@ -271,25 +234,24 @@ class ImageView(QGraphicsView):
                 self._apply_pinch(event.value())
                 event.accept()
                 return True
-            elif gesture_type in (
-                _QtCore.Qt.NativeGestureType.BeginNativeGesture,
-                _QtCore.Qt.NativeGestureType.EndNativeGesture,
-            ):
-                if gesture_type == _QtCore.Qt.NativeGestureType.BeginNativeGesture:
-                    self._last_pinch_value = 0.0
+            elif gesture_type == _QtCore.Qt.NativeGestureType.BeginNativeGesture:
+                self._last_pinch_value = 1.0
+                event.accept()
+                return True
+            elif gesture_type == _QtCore.Qt.NativeGestureType.EndNativeGesture:
                 event.accept()
                 return True
         return super().event(event)
 
     def wheelEvent(self, event):
-        # Two-finger trackpad scroll → pan
-        pixel = event.pixelDelta()
-        if not pixel.isNull():
-            self.translate(pixel.x(), pixel.y())
+        # Mouse wheel → zoom.  Trackpad scroll events carry a scroll phase;
+        # they are handled by ScrollHandDrag (two-finger pan) and the native
+        # gesture path (pinch), so reject them here — otherwise momentum
+        # tail events would be mistaken for mouse-wheel zoom.
+        if event.phase() != Qt.ScrollPhase.NoScrollPhase:
             event.accept()
             return
 
-        # Mouse wheel → zoom
         delta = event.angleDelta().y()
         if delta == 0:
             event.accept()
@@ -299,13 +261,21 @@ class ImageView(QGraphicsView):
         event.accept()
 
     def _apply_pinch(self, value: float):
-        """Apply a pinch magnification step."""
-        prev = getattr(self, '_last_pinch_value', 0.0)
+        """Apply a pinch magnification step.
+
+        On macOS the *value* is the absolute magnification since the gesture
+        began (1.0 = original size).  We compute the incremental factor
+        relative to the previous value and hand it off to the shared zoom
+        path so clamping and _zoom bookkeeping stay in one place.
+        """
+        prev = self._last_pinch_value
         self._last_pinch_value = value
-        delta = value - prev
-        if abs(delta) < 0.001:
+        if prev > 0.001:
+            factor = value / prev
+        else:
+            factor = value
+        if abs(factor - 1.0) < 0.002:
             return
-        factor = 1.0 + delta
         if factor <= 0:
             return
         self._apply_zoom_factor(factor)
