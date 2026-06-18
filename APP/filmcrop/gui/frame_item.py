@@ -11,6 +11,7 @@ from filmcrop.gui.theme import frame_color
 
 _EDGE_TOLERANCE = 12.0
 _HANDLE_SIZE = 8.0
+MIN_FRAME_SIZE = 20  # shared with main_window.py via import
 
 
 class DraggableFrameItem(QGraphicsRectItem):
@@ -137,10 +138,10 @@ class DraggableFrameItem(QGraphicsRectItem):
         dx, dy = int(delta.x()), int(delta.y())
 
         _EDGE_LIMITS = {
-            "top": ("top", dy, 0, lambda: self._frame["bottom"] - 20),
-            "bottom": ("bottom", dy, lambda: self._frame["top"] + 20, None),
-            "left": ("left", dx, 0, lambda: self._frame["right"] - 20),
-            "right": ("right", dx, lambda: self._frame["left"] + 20, None),
+            "top": ("top", dy, 0, lambda: self._frame["bottom"] - MIN_FRAME_SIZE),
+            "bottom": ("bottom", dy, lambda: self._frame["top"] + MIN_FRAME_SIZE, None),
+            "left": ("left", dx, 0, lambda: self._frame["right"] - MIN_FRAME_SIZE),
+            "right": ("right", dx, lambda: self._frame["left"] + MIN_FRAME_SIZE, None),
         }
         corner_map = {
             "tl": ("top", "left"),

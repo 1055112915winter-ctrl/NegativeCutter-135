@@ -56,10 +56,13 @@ class ImageView(QGraphicsView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
+        # Manual pan replaces ScrollHandDrag to avoid gesture conflicts.
+        self._panning = False
+        self._last_pan_pos = None
+        self._last_pinch_value = 0.0
 
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
@@ -82,8 +85,7 @@ class ImageView(QGraphicsView):
         self._on_frame_changed = None
         self._on_frame_released = None
 
-        # Zoom buttons (bottom-left corner overlay)
-        from PyQt6.QtWidgets import QPushButton  # noqa: re-import for clarity
+        from PyQt6.QtWidgets import QPushButton
 
         self._zoom_in_btn = QPushButton("+", self)
         self._zoom_in_btn.setStyleSheet(self.ZOOM_BTN_STYLE)
@@ -221,6 +223,40 @@ class ImageView(QGraphicsView):
             label.setPos(frame["left"] + 4, frame["top"] + 4)
 
     # ------------------------------------------------------------------ #
+    # Pan (manual, replaces ScrollHandDrag to avoid gesture conflicts)
+    # ------------------------------------------------------------------ #
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            item = self.itemAt(event.pos())
+            # Pan on empty canvas or pixmap; frame items handled by super
+            if item is None or item is self._pixmap_item:
+                self._panning = True
+                self._last_pan_pos = event.pos()
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._panning and self._last_pan_pos is not None:
+            delta = event.pos() - self._last_pan_pos
+            self._last_pan_pos = event.pos()
+            self.translate(delta.x(), delta.y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._panning:
+            self._panning = False
+            self._last_pan_pos = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    # ------------------------------------------------------------------ #
     # Zoom
     # ------------------------------------------------------------------ #
 
@@ -276,9 +312,14 @@ class ImageView(QGraphicsView):
 
     def _apply_zoom_factor(self, factor: float):
         new_zoom = self._zoom * factor
-        if self._min_zoom <= new_zoom <= self._max_zoom:
+        if new_zoom < self._min_zoom:
+            new_zoom = self._min_zoom
+        elif new_zoom > self._max_zoom:
+            new_zoom = self._max_zoom
+        if new_zoom != self._zoom:
+            effective = new_zoom / self._zoom
             self._zoom = new_zoom
-            self.scale(factor, factor)
+            self.scale(effective, effective)
 
     def zoom_in(self):
         self._apply_zoom_factor(1.25)

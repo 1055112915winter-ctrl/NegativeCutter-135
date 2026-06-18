@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from filmcrop.gui.frame_item import MIN_FRAME_SIZE
 from filmcrop.gui.image_view import ImageView
 from filmcrop.gui.export_dialog import ExportDialog
 from filmcrop.gui.logo import create_app_icon, create_header_logo_pixmap
@@ -54,7 +55,6 @@ from filmcrop.gui.logo import create_app_icon, create_header_logo_pixmap
 # Constants
 # --------------------------------------------------------------------------- #
 _MAX_UNDO_STEPS = 50
-_MIN_FRAME_SIZE = 20
 
 _FORMAT_FOR_SUFFIX = {
     ".tif": "TIFF",
@@ -722,10 +722,10 @@ class MainWindow(QMainWindow):
         f[key] = val
         if key in ("top", "left"):
             opposite = {"top": "bottom", "left": "right"}[key]
-            f[opposite] = max(f[opposite], val + _MIN_FRAME_SIZE)
+            f[opposite] = max(f[opposite], val + MIN_FRAME_SIZE)
         else:
             opposite = {"bottom": "top", "right": "left"}[key]
-            f[opposite] = min(f[opposite], val - _MIN_FRAME_SIZE)
+            f[opposite] = min(f[opposite], val - MIN_FRAME_SIZE)
         self._recalc_relative(f)
         self._update_frame_list()
         self._image_view.update_frame_geometry(row)
@@ -872,16 +872,16 @@ class MainWindow(QMainWindow):
             if direction in ("全部", "右"):
                 f["right"] = min(self._img_w, f["right"] + px)
 
-            if f["bottom"] - f["top"] < _MIN_FRAME_SIZE:
+            if f["bottom"] - f["top"] < MIN_FRAME_SIZE:
                 if direction in ("全部", "下"):
-                    f["bottom"] = min(self._img_h, f["top"] + _MIN_FRAME_SIZE)
+                    f["bottom"] = min(self._img_h, f["top"] + MIN_FRAME_SIZE)
                 else:
-                    f["top"] = max(0, f["bottom"] - _MIN_FRAME_SIZE)
-            if f["right"] - f["left"] < _MIN_FRAME_SIZE:
+                    f["top"] = max(0, f["bottom"] - MIN_FRAME_SIZE)
+            if f["right"] - f["left"] < MIN_FRAME_SIZE:
                 if direction in ("全部", "右"):
-                    f["right"] = min(self._img_w, f["left"] + _MIN_FRAME_SIZE)
+                    f["right"] = min(self._img_w, f["left"] + MIN_FRAME_SIZE)
                 else:
-                    f["left"] = max(0, f["right"] - _MIN_FRAME_SIZE)
+                    f["left"] = max(0, f["right"] - MIN_FRAME_SIZE)
 
             self._recalc_relative(f)
 

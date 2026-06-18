@@ -1680,8 +1680,10 @@ def _auto_detect_frames(smoothed, scan_size, cleanup_scale, max_frames=8):
             best_score = score
             best_frames = ef
             best_result = (ve, vv, pe, pv)
-    if best_score > 1e8:
+    if best_score > 1e8 or best_result is None:
         best_frames = 6
+    if best_result is None:
+        best_result = _analyze_single_config(smoothed, scan_size, 6, cleanup_scale)
     return best_frames, best_result
 
 
