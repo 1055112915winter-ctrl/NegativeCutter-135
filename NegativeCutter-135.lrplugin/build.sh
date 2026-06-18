@@ -86,6 +86,7 @@ trap 'rm -rf "$TMP_PACKAGE_DIR"' EXIT
 cp -R "$SCRIPT_DIR" "$TMP_PACKAGE_DIR/${PLUGIN_NAME}.lrplugin"
 cd "$TMP_PACKAGE_DIR/${PLUGIN_NAME}.lrplugin"
 rm -rf build dist __pycache__ .DS_Store
+rm -rf tests WORK CLAUDE.md debug_visualize.py detect_debug.log
 find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find . -type f -name '*.pyc' -delete 2>/dev/null || true
 find . -type f -name '*.pyo' -delete 2>/dev/null || true

@@ -73,12 +73,12 @@ print(module.has_api())
             "WORK",
         ):
             self.assertIn(artifact, source)
+        self.assertIn("rm -rf tests WORK", source)
         self.assertIn("forbidden", source.lower())
         self.assertIn('TMP_PACKAGE_DIR="${TMPDIR:-/tmp}/filmcrop-build-$$"', source)
         self.assertIn("Info.lua references missing files", source)
 
     def test_pyinstaller_spec_omits_removed_numpy_compatibility_modules(self):
-        source = (PLUGIN / "NegativeCutter.spec").read_text(encoding="utf-8")
         removed_modules = (
             "numpy.core._multiarray_tests",
             "numpy.core._operand_flag_tests",
@@ -93,8 +93,11 @@ print(module.has_api())
             "numpy.lib.ufunclike",
             "numpy.lib.utils",
         )
-        for module in removed_modules:
-            self.assertNotIn(f"'{module}'", source)
+        specs = (PLUGIN / "NegativeCutter.spec", PLUGIN.parent / "APP" / "NegativeCutter.spec")
+        for spec in specs:
+            source = spec.read_text(encoding="utf-8")
+            for module in removed_modules:
+                self.assertNotIn(f"'{module}'", source, str(spec))
 
 
 if __name__ == "__main__":
