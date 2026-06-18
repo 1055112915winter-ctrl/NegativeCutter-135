@@ -17,14 +17,16 @@ try:
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
+    FastAPI = None
+    BaseModel = None
 
 # Module-level server state
 _request_count: int = 0
 _server_instance: Any = None
 
-app = FastAPI(title="FilmCrop API", version="2.4.3")
-
+app = None
 if HAS_FASTAPI:
+    app = FastAPI(title="FilmCrop API", version="2.4.5")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost", "http://127.0.0.1"],
@@ -33,15 +35,26 @@ if HAS_FASTAPI:
     )
 
 
-class AnalyzeRequest(BaseModel):
-    image_path: str
-    expected_frames: int = 6
-    cleanup_scale: float = 0.5
-    original_path: Optional[str] = None
-    aspect_ratio: Optional[float] = None
-    format_hint: Optional[str] = None
-    lr_width: Optional[int] = None
-    lr_height: Optional[int] = None
+if HAS_FASTAPI:
+    class AnalyzeRequest(BaseModel):
+        image_path: str
+        expected_frames: int = 6
+        cleanup_scale: float = 0.5
+        original_path: Optional[str] = None
+        aspect_ratio: Optional[float] = None
+        format_hint: Optional[str] = None
+        lr_width: Optional[int] = None
+        lr_height: Optional[int] = None
+
+    class CropRequest(BaseModel):
+        image_path: str
+        frames: list
+        output_dir: str
+        fmt: str = "tiff"
+        quality: int = 95
+else:
+    AnalyzeRequest = None
+    CropRequest = None
 
 
 _FORMAT_RATIOS = {
@@ -71,26 +84,16 @@ def _resolve_aspect_ratio(req: "AnalyzeRequest") -> Optional[float]:
     return 3 / 2
 
 
-class CropRequest(BaseModel):
-    image_path: str
-    frames: list
-    output_dir: str
-    fmt: str = "tiff"
-    quality: int = 95
-
-
 def _inc_request() -> None:
     global _request_count
     _request_count += 1
 
 
-@app.get("/health")
 def health():
     _inc_request()
     return {"status": "ok", "service": "filmcrop"}
 
 
-@app.post("/analyze")
 def analyze(req: AnalyzeRequest):
     from filmcrop.detector import analyze_image
 
@@ -117,7 +120,6 @@ def analyze(req: AnalyzeRequest):
         return result
 
 
-@app.post("/crop")
 def crop(req: CropRequest):
     from filmcrop.export import crop_and_save
 
@@ -136,6 +138,12 @@ def crop(req: CropRequest):
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+if app is not None:
+    app.get("/health")(health)
+    app.post("/analyze")(analyze)
+    app.post("/crop")(crop)
 
 
 def get_request_count() -> int:

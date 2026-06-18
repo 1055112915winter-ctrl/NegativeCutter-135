@@ -3,7 +3,7 @@
   Lightroom 135 胶片扫描自动裁剪插件
 
   功能: 自动识别长条扫描胶片中的单帧，并创建虚拟副本
-  版本: 2.4.3
+  版本: 2.4.5
 ]]--
 
 return {
@@ -44,10 +44,6 @@ return {
       file = "BatchProcess.lua",
     },
     {
-      title = LOC "$$$/NegativeCutter/Menu/DiagOrientation=[诊断] 查看 orientation",
-      file = "tests/DiagOrientation.lua",
-    },
-    {
       title = LOC "$$$/NegativeCutter/Menu/Sponsor=☕ 赞助插件",
       file = "Sponsor.lua",
     },
@@ -66,6 +62,6 @@ return {
   VERSION = {
     major = 2,
     minor = 4,
-    revision = 4,
+    revision = 5,
   },
 }

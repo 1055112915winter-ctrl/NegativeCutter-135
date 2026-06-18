@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 FilmCrop 缩略图分析 - 兼容 CLI 入口
-版本: v2.4.4 - 核心算法已提取到 filmcrop 包
+版本: v2.4.5 - 核心算法已提取到 filmcrop 包
 
 向后兼容原有命令行接口：
     python3 detect_thumb.py <thumb_path> [--frames N] [--cleanup-scale X.X] [--original <path>]
 """
 
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -15,19 +16,28 @@ from pathlib import Path
 # Prevent Python from writing bytecode caches that can mask source changes
 sys.dont_write_bytecode = True
 
-# Diagnostic logging for Lightroom debugging
-_LOG_PATH = Path(__file__).parent / "detect_debug.log"
-try:
-    _LOG_PATH.write_text("detect_thumb.py started\n", encoding="utf-8")
-except Exception:
-    pass
+# File diagnostics are opt-in. Normal Lightroom runs already return structured
+# diagnostics on stdout and must not write source paths beside the plugin.
+_LOG_ENV = os.environ.get("NEGATIVECUTTER_DEBUG_LOG")
+_LOG_PATH = Path(_LOG_ENV).expanduser() if _LOG_ENV else None
+_MAX_LOG_BYTES = 512 * 1024
 
 def _log(msg):
+    if _LOG_PATH is None:
+        return
     try:
+        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if _LOG_PATH.exists() and _LOG_PATH.stat().st_size > _MAX_LOG_BYTES:
+            with open(_LOG_PATH, "rb") as existing:
+                existing.seek(-(_MAX_LOG_BYTES // 2), 2)
+                tail = existing.read()
+            _LOG_PATH.write_bytes(tail)
         with open(_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
     except Exception:
         pass
+
+_log("detect_thumb.py started")
 
 # Force local filmcrop package to take precedence over any system installation
 _script_dir = str(Path(__file__).parent)
