@@ -193,7 +193,23 @@ class ImageView(QGraphicsView):
     # ------------------------------------------------------------------ #
 
     def wheelEvent(self, event):
+        # Trackpad two-finger drag → pan (has pixelDelta + scroll phase)
+        pixel = event.pixelDelta()
+        if not pixel.isNull():
+            h_bar = self.horizontalScrollBar()
+            v_bar = self.verticalScrollBar()
+            if h_bar is not None:
+                h_bar.setValue(h_bar.value() + pixel.x())
+            if v_bar is not None:
+                v_bar.setValue(v_bar.value() + pixel.y())
+            event.accept()
+            return
+
+        # Mouse wheel or trackpad pinch → zoom
         delta = event.angleDelta().y()
+        if delta == 0:
+            event.accept()
+            return
         factor = 1.15 if delta > 0 else 1 / 1.15
         new_zoom = self._zoom * factor
         if self._min_zoom <= new_zoom <= self._max_zoom:

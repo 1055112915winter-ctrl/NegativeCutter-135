@@ -145,6 +145,21 @@ def build_stylesheet() -> str:
     QSpinBox:focus, QComboBox:focus {{
         border: 1px solid {FOCUS};
     }}
+    QComboBox QAbstractItemView {{
+        background-color: {CARD_BG};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER_WARM};
+        border-radius: 3px;
+        padding: 6px 10px;
+        font-size: 13px;
+        selection-background-color: {PANEL_BG};
+        selection-color: {TEXT_PRIMARY};
+        outline: none;
+    }}
+    QComboBox QAbstractItemView::item {{
+        padding: 8px 14px;
+        min-height: 24px;
+    }}
     QSpinBox::up-button, QSpinBox::down-button {{
         background: {BORDER_LIGHT};
         border-radius: 2px;

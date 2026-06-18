@@ -38,6 +38,10 @@ class ExportDialog(QDialog):
         self._format_combo = QComboBox()
         self._format_combo.addItems(["TIFF", "JPEG", "PNG"])
         self._format_combo.setCurrentText(default_format)
+        self._format_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._format_combo.setMinimumWidth(100)
         self._format_combo.currentTextChanged.connect(self._on_format_changed)
         layout.addRow("格式:", self._format_combo)
 
@@ -50,6 +54,10 @@ class ExportDialog(QDialog):
         self._color_space_combo = QComboBox()
         self._color_space_combo.addItems(["sRGB", "Adobe RGB", "保留原始"])
         self._color_space_combo.setCurrentText(default_color_space)
+        self._color_space_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._color_space_combo.setMinimumWidth(120)
         layout.addRow("色彩空间:", self._color_space_combo)
 
         self._output_dir_edit = QLabel()

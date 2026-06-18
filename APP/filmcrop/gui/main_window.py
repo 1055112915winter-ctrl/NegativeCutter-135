@@ -579,6 +579,7 @@ class MainWindow(QMainWindow):
         if not self._image_path:
             return
         expected = self._frame_count_spin.value()
+        self._btn_detect.setEnabled(False)
         self._status.showMessage("正在检测帧边界...")
         QTimer.singleShot(50, lambda: self._do_detect(expected))
 
@@ -593,6 +594,13 @@ class MainWindow(QMainWindow):
             HAS_PSUTIL = True
         except ImportError:
             HAS_PSUTIL = False
+
+        progress = QProgressDialog("正在检测帧边界...", None, 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.show()
+        QApplication.processEvents()
 
         t0 = time.time()
         mem_before = psutil.Process().memory_info().rss / 1024 / 1024 if HAS_PSUTIL else 0
@@ -613,6 +621,9 @@ class MainWindow(QMainWindow):
                 f"帧检测过程中发生错误:\n\n{str(e)}\n\n{tb}"
             )
             return
+        finally:
+            progress.close()
+            self._btn_detect.setEnabled(True)
 
         elapsed = time.time() - t0
         if not detected_frames:
