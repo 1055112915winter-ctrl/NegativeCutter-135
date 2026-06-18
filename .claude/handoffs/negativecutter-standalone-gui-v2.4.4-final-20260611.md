@@ -1,6 +1,43 @@
-# NegativeCutter Standalone GUI · v2.4.4 Final Handoff
+# NegativeCutter Standalone GUI · v2.4.5 Handoff
 
-> 2026-06-11 起始，2026-06-18 增量更新 · 当前独立桌面版 handoff。包含 PyInstaller onedir、签名、GUI 美化、一键打包入口，以及 16-bit 多通道图像显示修复。
+> 2026-06-11 起始，2026-06-19 最新更新 · 当前独立桌面版 handoff。包含 PyInstaller onedir、签名、GUI 美化、手势交互修复、检测进度条，以及 16-bit 多通道图像显示修复。
+
+## 2026-06-19 v2.4.5 GUI 交互修复增量
+
+### 1. 下拉框排版修复
+- **问题**：导出对话框中格式/色彩空间下拉框文字被压缩截断
+- **修复**：`export_dialog.py` QComboBox 添加 `setSizeAdjustPolicy(AdjustToMinimumContentsLengthWithIcon)` + `setMinimumWidth`
+- **样式**：`style_sheet.py` 新增 `QComboBox QAbstractItemView` / `QAbstractItemView::item` 样式，下拉列表项内边距充足
+
+### 2. 手势交互彻底重写（`image_view.py`）
+- **根因**：`ScrollHandDrag` 拖拽模式与手动平移/原生手势事件互相冲突，导致"拉拽感"和手势完全失效；macOS pin 合手势通过 `QNativeGestureEvent`（非 `QWheelEvent`）传递
+- **修复**：
+  - **移除 ScrollHandDrag**，改为手动鼠标拖拽平移：`mousePressEvent` / `mouseMoveEvent` / `mouseReleaseEvent` 在空白画布或图像上左键拖拽时直接 `translate()`，帧框边角拖拽仍正常交给 `DraggableFrameItem`
+  - **Pinch 缩放**：`event()` 拦截 `QNativeGestureEvent.ZoomNativeGesture`，追踪增量值计算缩放因子（`_apply_pinch` → `_apply_zoom_factor`）
+  - **Trackpad 双指平移**：`wheelEvent` 中 `pixelDelta` 非空 → `translate()` 平移
+  - **鼠标滚轮缩放**：`wheelEvent` 中无 `pixelDelta` → `_apply_zoom_factor`
+  - **缩放按钮**：画布左下角悬浮 `+` / `−` 按钮，半透明深色风格，`resizeEvent` 中重新定位
+  - **键盘快捷键**：`]` / `+` / `=` 放大，`[` / `-` 缩小，`Ctrl+0` 重置缩放
+  - **缩放约束**：0.05x – 8.0x，`_apply_zoom_factor` 统一夹紧
+
+### 3. 检测进度条
+- 帧检测期间显示不确定进度条（marquee），同时禁用检测按钮防重复点击
+- `finally` 块确保无论成功/失败都关闭进度条并恢复按钮
+
+### 4. 图标安全加固（`Negativ eCutter.spec`）
+- 移除跨 worktree icon fallback，仅接受 canonical `APP/NegativeCutter.icns`
+- `build_app.sh` 在 PyInstaller 前强制运行 `generate_icns.py` + 存在性检查
+
+### 5. 版本号
+- `filmcrop/__init__.py`（plugin × 1 + APP × 1）：2.4.4 → 2.4.5
+- `Info.lua`：2.4.3 → 2.4.5
+
+### 6. 验证
+- GUI 测试：21/23 通过（2 个 sandbox `PermissionError` 与改动无关）
+- 打包契约：3/4 通过（1 个 sandbox subprocess 限制）
+- 手势单元测试：9/9 通过（pan/zoom/button/key/clamp 全覆盖）
+- Fresh rebuild + codesign 通过
+- 最新产物：`APP/NegativeCutter.app`（arm64，v2.4.5）
 
 ## 2026-06-18 macOS 应用图标统一增量
 
@@ -209,30 +246,30 @@ APP/scripts/package_app.sh
 
 ```
 APP/
-├── NegativeCutter.app               # ★ 最新打包产物（94MB arm64，对称 Logo）
-├── NegativeCutter.icns              # macOS 应用图标（QPainter 绘制，对称设计）
-├── NegativeCutter.spec              # PyInstaller 配置（onedir 模式 + target_arch 支持）
+├── NegativeCutter.app               # ★ 最新打包产物（arm64，v2.4.5）
+├── NegativeCutter.icns              # canonical 应用图标（生成后纳入源码）
+├── NegativeCutter.spec              # PyInstaller 配置（onedir + target_arch + 强制 icon）
 ├── main.py                          # PyInstaller 入口
-├── generate_icns.py                 # .icns 图标生成脚本（对称 Logo）
+├── generate_icns.py                 # .icns 图标生成脚本
 ├── scripts/
-│   ├── build_app.sh                 # 打包脚本（支持 --target-arch universal2）
+│   ├── build_app.sh                 # 打包脚本（PyInstaller 前生成 icon）
 │   ├── sign_app.sh                  # 签名验证与 ad-hoc 重签名脚本
-│   └── package_app.sh               # ★ GUI 版本推荐入口：测试 + 打包 + 严格验签（不自动启动）
+│   └── package_app.sh               # ★ GUI 版本推荐入口：测试 + 打包 + 严格验签
 └── filmcrop/
-    ├── __init__.py                  # v2.4.4
+    ├── __init__.py                  # v2.4.5
     ├── detector.py                  # 帧检测引擎
     ├── export.py                    # JSON/XMP/图像裁切导出
     ├── api.py                       # FastAPI 服务器
     └── gui/
         ├── __init__.py
         ├── __main__.py
-        ├── main_window.py           # ★ 主窗口：QScrollArea 面板 + 调优数据记录
-        ├── image_view.py            # QGraphicsView 暗色画布（16-bit 多通道显示保留 RGB）
-        ├── frame_item.py            # 可拖拽帧框（边角拖拽 Bug 修复）
-        ├── export_dialog.py         # 导出对话框（JPEG 质量透传）
-        ├── logo.py                  # ★ 对称品牌图标（中心菱形 + 2x2 孔洞）
+        ├── main_window.py           # ★ 主窗口：检测进度条 + QScrollArea 面板
+        ├── image_view.py            # ★ 手动平移 + 原生手势缩放 + 缩放按钮
+        ├── frame_item.py            # 可拖拽帧框
+        ├── export_dialog.py         # 导出对话框（下拉框排版修复）
+        ├── logo.py                  # 对称品牌图标
         ├── theme.py                 # 暗色暖调设计 token
-        └── style_sheet.py           # QSS 样式表
+        └── style_sheet.py           # QSS 样式表（含下拉列表样式）
 ```
 
 ## v2.4.4 变更清单
