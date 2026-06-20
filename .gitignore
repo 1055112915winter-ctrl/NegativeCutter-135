@@ -64,6 +64,13 @@ release/
 # Marketing content
 marketing/
 
+# Local investigation workspace
+test_files/
+test_outputs/
+task_plan.md
+findings.md
+progress.md
+
 # Secrets
 .env
 .env.*

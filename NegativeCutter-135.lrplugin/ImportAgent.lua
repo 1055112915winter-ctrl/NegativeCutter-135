@@ -494,7 +494,7 @@ local function detectViaHttp()
   if not hasHttp then
     LrDialogs.message(
       "NegativeCutter - 引擎未连接",
-      "无法连接到 NegativeCutter 独立引擎。\n\n请按以下步骤操作:\n1. 在终端运行: python -m negativecutter.gui\n2. 在 GUI 中点击「工具 → 启动 API 服务器」\n3. 重新运行此菜单项",
+      "无法连接到 NegativeCutter 独立引擎。\n\n请按以下步骤操作:\n1. 在终端运行: python -m filmcrop.gui\n2. 在 GUI 中点击「工具 → 启动 API 服务器」\n3. 重新运行此菜单项",
       "warning"
     )
     return
