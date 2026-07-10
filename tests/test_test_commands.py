@@ -14,6 +14,12 @@ class TestCommandContractTests(unittest.TestCase):
         self.assertIn("test_medium_format_detection.py", source)
         self.assertIn("test_applier_rotation_safety.lua", source)
         self.assertIn("test_process_agent_orientation.lua", source)
+        self.assertTrue(
+            (ROOT / "NegativeCutter-135.lrplugin/tests/test_applier_rotation_safety.lua").is_file()
+        )
+        self.assertTrue(
+            (ROOT / "NegativeCutter-135.lrplugin/tests/test_process_agent_orientation.lua").is_file()
+        )
 
     def test_fixture_runner_declares_all_real_recognition_assets(self):
         source = (ROOT / "scripts" / "run_fixture_tests.sh").read_text(encoding="utf-8")
