@@ -353,19 +353,24 @@ function ProcessAgent.directionAlign(result, photo)
     lrWidth, lrHeight, result.sourceWidth or 0, result.sourceHeight or 0))
 
   local needsRotate = false
-  local rotate180 = false
+  local rotationMode = nil
 
   if lrOrientation == "CD" then
     -- Explicit 180° rotation. Aspect-ratio heuristic misses this because
     -- width/height stay the same, so we rely on the orientation tag.
     needsRotate = true
-    rotate180 = true
+    rotationMode = "CD"
     logger:trace("orientation=CD, applying 180° rotation")
   elseif isPyHorizontal ~= isLrHorizontal then
-    -- 90° mismatch (BC or DA). Existing logic covers both correctly for
-    -- thumbnail-based detection because the aspect-ratio flip is symmetric.
+    -- 90° mismatch. BC and DA are different transforms; treating both as a
+    -- plain transpose only appears correct for centred/symmetric rectangles.
     needsRotate = true
-    logger:trace("方向不一致，旋转坐标...")
+    if lrOrientation == "BC" or lrOrientation == "DA" then
+      rotationMode = lrOrientation
+    else
+      rotationMode = "transpose"
+    end
+    logger:trace("方向不一致，按 " .. rotationMode .. " 旋转坐标...")
   end
 
   if not needsRotate then
@@ -378,14 +383,26 @@ function ProcessAgent.directionAlign(result, photo)
     local origRelLeft = frame.relativeLeft or 0.0
     local origRelRight = frame.relativeRight or 1.0
 
-    if rotate180 then
+    if rotationMode == "CD" then
       -- 180°: mirror around centre
       frame.relativeTop = 1.0 - origRelBottom
       frame.relativeBottom = 1.0 - origRelTop
       frame.relativeLeft = 1.0 - origRelRight
       frame.relativeRight = 1.0 - origRelLeft
+    elseif rotationMode == "BC" then
+      -- 90° clockwise: (t,b,l,r) -> (1-r,1-l,t,b)
+      frame.relativeTop = 1.0 - origRelRight
+      frame.relativeBottom = 1.0 - origRelLeft
+      frame.relativeLeft = origRelTop
+      frame.relativeRight = origRelBottom
+    elseif rotationMode == "DA" then
+      -- 90° counter-clockwise: (t,b,l,r) -> (l,r,1-b,1-t)
+      frame.relativeTop = origRelLeft
+      frame.relativeBottom = origRelRight
+      frame.relativeLeft = 1.0 - origRelBottom
+      frame.relativeRight = 1.0 - origRelTop
     else
-      -- 90° rotation (existing behaviour)
+      -- Metadata unavailable: retain the historical transpose fallback.
       frame.relativeTop = origRelLeft
       frame.relativeBottom = origRelRight
       frame.relativeLeft = origRelTop
@@ -401,7 +418,7 @@ function ProcessAgent.directionAlign(result, photo)
   result.sourceWidth = lrWidth
   result.sourceHeight = lrHeight
 
-  if rotate180 then
+  if rotationMode == "CD" then
     -- 180°: the rotation axis is flipped twice; sign stays the same.
     -- No change to cropAngle.
   else

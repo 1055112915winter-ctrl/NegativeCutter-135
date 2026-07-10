@@ -214,6 +214,8 @@ class GuiFrameEditingTest(unittest.TestCase):
             "scan.tif",
             expected_frames=1,
             include_review_frames=True,
+            aspect_ratio=1.5,
+            film_format="35mm",
         )
         self.assertEqual(self.window._frames, [detected])
         self.assertIn("低置信度", self.window._status.currentMessage())

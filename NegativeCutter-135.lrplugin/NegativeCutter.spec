@@ -10,14 +10,17 @@ from pathlib import Path
 # PyInstaller executes the spec file via exec(), so __file__ is not available.
 # Use sys.argv[0] which points to the spec file path during build.
 plugin_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+root_src = os.path.join(os.path.dirname(plugin_dir), 'src')
 if plugin_dir not in sys.path:
     sys.path.insert(0, plugin_dir)
+if root_src not in sys.path:
+    sys.path.insert(0, root_src)
 
 block_cipher = None
 
 a = Analysis(
     ['detect_thumb.py'],
-    pathex=[plugin_dir],
+    pathex=[plugin_dir, root_src],
     binaries=[],
     datas=[],
     hiddenimports=[
@@ -26,6 +29,13 @@ a = Analysis(
         'filmcrop.detector',
         'filmcrop.export',
         'filmcrop.api',
+        # canonical shared detection core
+        'negativecutter_core',
+        'negativecutter_core.detector',
+        'negativecutter_core.rotation',
+        'negativecutter_core.formats',
+        'negativecutter_core.orientation',
+        'negativecutter_core.medium_format',
         # rawpy + LibRaw for DNG decoding
         'rawpy',
         # PIL image plugins (lazy-loaded, must be explicit for PyInstaller)

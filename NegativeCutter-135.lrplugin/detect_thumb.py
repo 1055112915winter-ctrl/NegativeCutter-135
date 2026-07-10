@@ -94,10 +94,9 @@ def main():
     lr_width = None
     lr_height = None
 
-    _FORMAT_MAP = {
-        "35mm": 3 / 2, "645": 4 / 3, "6x6": 1.0, "6x7": 7 / 6,
-        "6x8": 8 / 6, "6x9": 3 / 2, "4x5": 5 / 4,
-    }
+    from negativecutter_core.formats import FILM_FORMATS
+
+    _FORMAT_MAP = {code: spec.aspect_ratio for code, spec in FILM_FORMATS.items()}
 
     i = 2
     while i < len(sys.argv):
@@ -140,6 +139,7 @@ def main():
             aspect_ratio=format_ratio,
             lr_width=lr_width,
             lr_height=lr_height,
+            film_format=format_hint,
         )
         _log(f"analyze_image OK: frameCount={result.get('frameCount')}")
         # Inject diagnostic info so Lightroom (or CLI) can verify which code ran

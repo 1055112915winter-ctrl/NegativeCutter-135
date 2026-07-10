@@ -62,11 +62,14 @@ function ApplierAgent.applyCrop(photo, cropRegion)
   -- 注意: 不能在 pcall 中调用 applyDevelopSettings，因为它内部会 yield
   -- 必须在 withWriteAccessDo 块中直接调用
   -- 关键: 每次修改裁剪框时必须同步禁用 Upright，否则 Lightroom 会自动重算透视校正
-  -- 忽略微小旋转角（<0.5°），避免扫描噪声导致的斜边
+  -- 旋转是可选优化，不得让可用裁切变成灾难性旋转。
+  -- 双层熔断：忽略 <0.5° 噪声，同时拒绝非有限值和 >3° 离群值。
   local rawAngle = cropRegion.cropAngle or 0
-  local cropAngle = math.abs(rawAngle) > 0.5 and rawAngle or 0
+  local isFiniteAngle = rawAngle == rawAngle and math.abs(rawAngle) < math.huge
+  local isSafeAngle = isFiniteAngle and math.abs(rawAngle) <= 3.0
+  local cropAngle = isSafeAngle and math.abs(rawAngle) > 0.5 and rawAngle or 0
   if rawAngle ~= cropAngle then
-    logger:trace(string.format("忽略微小旋转角 %.3f°，重置为 0", rawAngle))
+    logger:trace(string.format("拒绝不安全或无意义的旋转角 %s°，重置为 0", tostring(rawAngle)))
   end
   local settings = {
     CropTop = top,

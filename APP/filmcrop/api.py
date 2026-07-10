@@ -8,7 +8,14 @@ Endpoints:
 """
 
 from pathlib import Path
+import sys
 from typing import Any, List, Optional
+
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from negativecutter_core.formats import FILM_FORMATS, normalize_format_code
 
 try:
     from fastapi import FastAPI
@@ -60,15 +67,7 @@ else:
     CropRequest = None  # type: ignore[misc,assignment]
 
 
-_FORMAT_RATIOS = {
-    "35mm": 3 / 2,
-    "645": 4 / 3,
-    "6x6": 1.0,
-    "6x7": 7 / 6,
-    "6x8": 8 / 6,
-    "6x9": 3 / 2,
-    "4x5": 5 / 4,
-}
+_FORMAT_RATIOS = {code: spec.aspect_ratio for code, spec in FILM_FORMATS.items()}
 
 
 def _resolve_aspect_ratio(req: "AnalyzeRequest") -> Optional[float]:
@@ -85,6 +84,11 @@ def _resolve_aspect_ratio(req: "AnalyzeRequest") -> Optional[float]:
     if hint in _FORMAT_RATIOS:
         return _FORMAT_RATIOS[hint]
     return 3 / 2
+
+
+def _resolve_format_code(req: "AnalyzeRequest") -> Optional[str]:
+    hint = normalize_format_code(req.format_hint)
+    return hint if hint in FILM_FORMATS else None
 
 
 def _inc_request() -> None:
@@ -112,6 +116,7 @@ def analyze(req: AnalyzeRequest):
             aspect_ratio=_resolve_aspect_ratio(req),
             lr_width=req.lr_width,
             lr_height=req.lr_height,
+            film_format=_resolve_format_code(req),
         )
         return result
     except Exception as e:

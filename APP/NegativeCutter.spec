@@ -10,8 +10,11 @@ from pathlib import Path
 # Use sys.argv[0] which PyInstaller sets to the spec path.
 spec_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 app_dir = spec_dir
+root_src = os.path.join(os.path.dirname(app_dir), 'src')
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
+if root_src not in sys.path:
+    sys.path.insert(0, root_src)
 
 # Use only the canonical icon generated beside this spec. Never fall back to
 # another worktree, where a stale brand asset could be selected silently.
@@ -25,7 +28,7 @@ block_cipher = None
 
 a = Analysis(
     ['main.py'],
-    pathex=[app_dir],
+    pathex=[app_dir, root_src],
     binaries=[],
     datas=[],
     hiddenimports=[
@@ -34,6 +37,13 @@ a = Analysis(
         'filmcrop.detector',
         'filmcrop.export',
         'filmcrop.api',
+        # canonical shared detection core
+        'negativecutter_core',
+        'negativecutter_core.detector',
+        'negativecutter_core.rotation',
+        'negativecutter_core.formats',
+        'negativecutter_core.orientation',
+        'negativecutter_core.medium_format',
         # GUI modules
         'filmcrop.gui',
         'filmcrop.gui.main_window',

@@ -203,6 +203,20 @@ class MainWindow(QMainWindow):
         c1.setSpacing(10)
 
         c1.addWidget(self._section_title("DETECTION"))
+        c1.addWidget(QLabel("胶片画幅"))
+        self._film_format_combo = QComboBox()
+        self._film_format_combo.setMinimumHeight(40)
+        self._film_format_combo.setToolTip("明确选择画幅可避免 35mm 与 120 6×9 的 3:2 比例歧义")
+        self._film_format_combo.addItem("自动判断", None)
+        self._film_format_combo.addItem("135 (35mm)", "35mm")
+        self._film_format_combo.addItem("120 6×4.5", "645")
+        self._film_format_combo.addItem("120 6×6", "6x6")
+        self._film_format_combo.addItem("120 6×7", "6x7")
+        self._film_format_combo.addItem("120 6×8", "6x8")
+        self._film_format_combo.addItem("120 6×9", "6x9")
+        self._film_format_combo.setCurrentIndex(1)
+        c1.addWidget(self._film_format_combo)
+
         c1.addWidget(QLabel("预期帧数"))
         self._frame_count_spin = QSpinBox()
         self._frame_count_spin.setRange(0, 20)
@@ -588,6 +602,7 @@ class MainWindow(QMainWindow):
         if self._image_path is None:
             return
         from filmcrop.detector import analyze_image
+        from negativecutter_core.formats import format_aspect_ratio
         import traceback
 
         try:
@@ -606,10 +621,13 @@ class MainWindow(QMainWindow):
         t0 = time.time()
         mem_before = psutil.Process().memory_info().rss / 1024 / 1024 if HAS_PSUTIL else 0
         try:
+            film_format = self._film_format_combo.currentData()
             result = analyze_image(
                 self._image_path,
                 expected_frames=expected,
                 include_review_frames=True,
+                aspect_ratio=format_aspect_ratio(film_format),
+                film_format=film_format,
             )
             detected_frames = result.get("frames", [])
             self._debug_info = result.get("debug")

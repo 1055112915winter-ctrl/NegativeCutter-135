@@ -1,9 +1,9 @@
-# NegativeCutter-135
+# NegativeCutter
 
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/1055112915winter-ctrl/NegativeCutter-135)](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-> Lightroom Classic 插件，自动识别 135 胶片扫描长条图中的单帧边界，并创建带精确裁剪的虚拟副本。
+> Lightroom Classic 插件与 standalone APP，自动识别 135 和单排 120 胶片扫描中的帧边界。
 
 ---
 
@@ -17,6 +17,9 @@
 - **开箱即用**：内置检测引擎，无需安装 Python 或 pip
 - **SubIFD DNG 解码**：直接解析 DNG RAW 像素，无需 rawpy
 - **严格 3:2 比例**：middle frames 自动锁定精确比例
+- **120 各画幅**：支持单排 645、6×6、6×7、6×8、6×9
+- **旋转安全**：不可信或超过 3° 的角度不会写入最终裁切
+- **单一检测核心**：APP 与 Lightroom 使用同一份算法源码
 - **边缘白边消除**：收紧-only 约束 + 安全边距
 - **赞助支持**：内置赞赏码入口，支持插件持续开发
 - **问题反馈**：一键提交使用反馈
@@ -25,9 +28,9 @@
 
 - macOS（Intel / Apple Silicon）
 - Adobe Lightroom Classic 10.0+
-- 135 胶片扫描长条图（DNG / TIFF）
+- 135 或单排 120 胶片扫描长条图（DNG / TIFF）
 
-> **注意**：当前仅适配 135 胶片规格。120、110 等规格尚未支持。
+> **注意**：120 仅支持单排扫描；多排/网格、110 等规格尚未支持。
 
 ## 安装
 
@@ -50,7 +53,7 @@
 
 1. 在 Lightroom Classic **图库模块**或**修改照片模块**中选中扫描文件
 2. 菜单：`文件 → 增效工具额外命令 → NegativeCutter → 检测胶片帧`
-3. 输入预期帧数（默认 6，填 0 自动检测）
+3. 选择胶片画幅，并输入预期帧数（填 0 自动检测）
 4. 点击「开始检测」
 
 ### 批量处理
@@ -74,12 +77,16 @@ Lightroom SDK 不支持插件内置全局快捷键。通过 macOS 系统设置�
 ```
 Lightroom Classic (Lua SDK)
     ↓ 缩略图路径
-NegativeCutter 检测引擎 (Python + NumPy + Pillow)
+negativecutter_core (Python + NumPy + Pillow)
     ↓ JSON 结果
 Lightroom (创建虚拟副本 + 应用裁剪)
 ```
 
 检测引擎通过 PyInstaller 打包为独立可执行文件，无需用户安装 Python 环境。
+
+维护者请先阅读 [架构](docs/ARCHITECTURE.md)、[检测管线](docs/DETECTION_PIPELINE.md)、
+[测试](docs/TESTING.md)、[新增画幅](docs/ADDING_FILM_FORMATS.md) 与
+[仓库卫生](docs/REPOSITORY_HYGIENE.md)。
 
 ## 故障排除
 
@@ -95,8 +102,9 @@ Lightroom (创建虚拟副本 + 应用裁剪)
 # 本地开发环境
 pip install numpy pillow
 
-# 重新打包检测引擎
-pyinstaller NegativeCutter.spec
+# 确定性测试
+scripts/run_unit_tests.sh
+scripts/run_fixture_tests.sh
 ```
 
 ## 开源协议

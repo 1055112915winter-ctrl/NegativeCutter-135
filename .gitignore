@@ -34,9 +34,10 @@ README
 # Dev directories
 .claude/
 FilmCrop_Clean.lrplugin/
-docs/
-scripts/
 vendor-analysis/
+
+# Local one-off investigations (maintained docs/scripts are tracked)
+docs/detector-ab-comparison.md
 
 # NegativeCutter-135 plugin dev artifacts
 NegativeCutter-135.lrplugin/build/
@@ -63,6 +64,13 @@ release/
 
 # Marketing content
 marketing/
+
+# Local investigation workspace
+/test_files
+test_outputs/
+task_plan.md
+findings.md
+progress.md
 
 # Secrets
 .env
