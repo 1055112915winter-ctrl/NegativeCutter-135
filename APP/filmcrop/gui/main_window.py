@@ -223,6 +223,7 @@ class MainWindow(QMainWindow):
         self._frame_count_spin.setValue(6)
         self._frame_count_spin.setToolTip("0 = 自动检测")
         c1.addWidget(self._frame_count_spin)
+        self._film_format_combo.currentIndexChanged.connect(self._on_film_format_changed)
 
         self._btn_detect = QPushButton("检测帧 (Ctrl+D)")
         self._btn_detect.setObjectName("primary")
@@ -597,6 +598,10 @@ class MainWindow(QMainWindow):
         self._btn_detect.setEnabled(False)
         self._status.showMessage("正在检测帧边界...")
         QTimer.singleShot(50, lambda: self._do_detect(expected))
+
+    def _on_film_format_changed(self):
+        if self._film_format_combo.currentData() is None:
+            self._frame_count_spin.setValue(0)
 
     def _do_detect(self, expected: int):
         if self._image_path is None:

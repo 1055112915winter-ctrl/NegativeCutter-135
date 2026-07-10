@@ -76,6 +76,17 @@ class GuiMediumFormatRoutingTests(unittest.TestCase):
         self.assertEqual(analyze.call_args.kwargs["film_format"], "6x7")
         self.assertEqual(analyze.call_args.kwargs["aspect_ratio"], 7 / 6)
 
+    def test_gui_auto_format_switches_frame_count_to_auto(self):
+        window = MainWindow()
+        try:
+            window._frame_count_spin.setValue(6)
+            window._film_format_combo.setCurrentIndex(0)
+
+            self.assertIsNone(window._film_format_combo.currentData())
+            self.assertEqual(window._frame_count_spin.value(), 0)
+        finally:
+            window.close()
+
     def _should_use_120(self, width, height, expected_frames, film_format):
         if not hasattr(detector, "_should_use_120"):
             self.fail("APP detector._should_use_120 is not implemented")
