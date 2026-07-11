@@ -4,7 +4,7 @@ local PreviewAgent = {}
 local registry = {}
 local nextId = 0
 
-local function now(clock) return (clock and clock.now and clock.now()) or os.clock() end
+local function now(clock) return (clock and clock.now and clock.now()) or (os.time() * 1000) end
 local function spawn(s, f) if s and s.spawn then return s.spawn(f) end; return f() end
 local function sleep(s, ms) if s and s.sleep then return s.sleep(ms) end end
 
@@ -12,11 +12,13 @@ function PreviewAgent.review(context, request, adapters)
   adapters = adapters or {}; local scheduler = adapters.scheduler or {}
   local clock, fs, renderer = adapters.clock, adapters.filesystem or {}, adapters.renderer or {}
   nextId = nextId + 1
-  local id = tostring(nextId); local root = adapters.previewRoot or fs.previewRoot or "/tmp/NegativeCutterPreview"
+  local id = adapters.uuid and adapters.uuid() or string.format("%08x-%08x", os.time(), math.random(0,0xffffff))
+  local root = adapters.previewRoot or fs.previewRoot or "/tmp/NegativeCutterPreview"
   local dir = root .. "/" .. id
   if fs.mkdir then fs.mkdir(dir) end
   local state = {topPx=0,bottomPx=0,leftPx=0,rightPx=0,generation=0,deadline=0,pending=false,closed=false,status="idle",frames={}}
-  local current, activeGeneration = nil, 0
+  local current, activeGeneration, workerActive = nil, 0, false
+  local slot = 0
   local dialog = { state=state, id=id, dir=dir }
   registry[id] = dialog
 
@@ -31,29 +33,41 @@ function PreviewAgent.review(context, request, adapters)
   local function worker(gen, req, deadline)
     sleep(scheduler, math.max(0, deadline - now(clock)))
     if state.closed or state.generation ~= gen or now(clock) < deadline then return end
-    local out = dir .. "/preview-" .. tostring(gen) .. ".png"
+    local out = dir .. "/slot-" .. tostring((slot + 1) % 2) .. ".png"
     local ok, result = pcall(function()
       if not renderer.render then error("renderer.render missing") end
       return renderer.render(req, out, context)
     end)
     if state.closed or state.generation ~= gen then return end
     if not ok or result == false then state.pending=false; state.status="failure"; return end
-    if fs.publish then fs.publish(out, dir .. "/active.png", gen) end
+    if fs.publish then slot=(slot+1)%2; fs.publish(out, dir .. "/active.png", gen) end
     if type(result) ~= "table" then result = {frames=result} end
     publish(gen, result)
+  end
+  local function ensureWorker()
+    if workerActive then return end
+    workerActive=true
+    spawn(scheduler, function()
+      while not state.closed do
+        local gen, deadline, req = state.generation, state.deadline, dialog._request
+        worker(gen, req, deadline)
+        if state.closed or gen == state.generation then break end
+      end
+      workerActive=false
+    end)
   end
   function dialog:edit(req)
     if state.closed then return false end
     state.generation = state.generation + 1; local gen = state.generation; local deadline = now(clock) + 120
     state.deadline = deadline; state.pending=true; state.status="pending"
-    spawn(scheduler, function() worker(gen, req, deadline) end); return gen
+    dialog._request=req; ensureWorker(); return gen
   end
   function dialog:Reset()
     if state.closed then return false end
     state.topPx,state.bottomPx,state.leftPx,state.rightPx=0,0,0,0
     state.generation=state.generation+1; local gen=state.generation; local deadline=now(clock)+120
     state.deadline=deadline; state.pending=true; state.status="pending"
-    spawn(scheduler, function() worker(gen, request, deadline) end); return true
+    dialog._request={offsets={topPx=0,bottomPx=0,leftPx=0,rightPx=0}, source=request}; ensureWorker(); return true
   end
   function dialog:Confirm()
     if state.closed or state.pending or state.status ~= "ready" then return false end
@@ -67,6 +81,14 @@ function PreviewAgent.review(context, request, adapters)
   return dialog
 end
 
-function PreviewAgent.closeAll() for _,d in pairs(registry) do d:close() end; registry={} end
+function PreviewAgent.closeAll() local all={}; for _,d in pairs(registry) do all[#all+1]=d end; for _,d in ipairs(all) do d:close() end; registry={} end
 function PreviewAgent.registry() return registry end
+function PreviewAgent.scavenge(root, fs, currentSession)
+  if not fs or not fs.list then return 0 end
+  local n=0
+  for _,name in ipairs(fs.list(root) or {}) do
+    if name ~= currentSession and name:match("^[%x]+-[%x]+$") then if fs.remove then fs.remove(root.."/"..name); n=n+1 end end
+  end
+  return n
+end
 return PreviewAgent
