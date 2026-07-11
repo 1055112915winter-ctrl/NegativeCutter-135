@@ -53,6 +53,23 @@ class PluginHardeningTests(unittest.TestCase):
             self.assertIn(required, source)
         self.assertIn("exact release file set", source.lower())
 
+    def test_installation_docs_describe_release_zip_installer_contract(self):
+        required = (
+            "release ZIP",
+            "top-level `install.sh`",
+            "validates the release and stages it before replacing the installed plugin",
+            "rolls back if installation fails",
+            "`NEGATIVECUTTER_MODULES_DIR`",
+            "advanced/test override",
+            "Restart Lightroom",
+            "Plugin Manager",
+        )
+        for document in (PLUGIN / "INSTALL.md", PLUGIN / "README.md"):
+            source = document.read_text(encoding="utf-8")
+            for text in required:
+                with self.subTest(document=document.name, text=text):
+                    self.assertIn(text, source)
+
     def test_install_rejects_malformed_or_tampered_manifest_before_target_change(self):
         installer = PLUGIN / "install.sh"
         with tempfile.TemporaryDirectory() as tmp:
