@@ -14,7 +14,9 @@ STAGE="${TMPDIR:-/tmp}/filmcrop-release-$$"
 EXTRACTED="$STAGE/extracted"
 FIXTURE_135="${NEGATIVECUTTER_RELEASE_135_FIXTURE:-$SCRIPT_DIR/../test_files/52191.tif}"
 FIXTURE_120="${NEGATIVECUTTER_RELEASE_120_FIXTURE:-$SCRIPT_DIR/../test_files/Untitled (3).tif}"
-trap 'rm -rf "$STAGE"; rm -f "$OUTPUT_ZIP"' ERR INT TERM
+cleanup_failure() { rm -rf "$STAGE"; rm -f "$OUTPUT_ZIP"; }
+trap cleanup_failure ERR
+trap 'cleanup_failure; exit 1' INT TERM
 trap 'rm -rf "$STAGE"' EXIT
 
 [[ -f "$FIXTURE_135" && ! -L "$FIXTURE_135" ]] || { echo "ERROR: missing 135 release fixture: $FIXTURE_135" >&2; exit 1; }

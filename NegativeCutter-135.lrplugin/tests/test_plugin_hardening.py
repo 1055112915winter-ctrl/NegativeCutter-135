@@ -135,6 +135,17 @@ class PluginHardeningTests(unittest.TestCase):
             self.assertNotEqual(failed.returncode, 0)
             self.assertEqual((target / "old.txt").read_bytes(), b"preserve me")
 
+    def test_install_restores_backup_after_post_swap_failure(self):
+        installer = PLUGIN / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = self._fixture_plugin(root / "release")
+            modules = root / "modules"; modules.mkdir(); target = modules / source.name; target.mkdir()
+            (target / "old.bin").write_bytes(b"old target bytes\x00")
+            env = {**self._codesign_env(root), "NEGATIVECUTTER_MODULES_DIR": str(modules), "NEGATIVECUTTER_TEST_SKIP_CODESIGN": "1", "NEGATIVECUTTER_TEST_FAIL_AFTER_SWAP": "1"}
+            proc = subprocess.run([str(installer), str(source)], env=env, check=False, capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual((target / "old.bin").read_bytes(), b"old target bytes\x00")
+
     def test_release_fixture_override_is_a_regular_file(self):
         fixture = os.environ.get("NEGATIVECUTTER_RELEASE_135_FIXTURE")
         if fixture:
@@ -160,6 +171,10 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertIn("trap finish EXIT", source)
         self.assertIn("trap 'exit 1' INT TERM", source)
         self.assertLess(source.index("committed=1"), source.index("trap - EXIT INT TERM"))
+
+    def test_build_signal_trap_cleans_up_and_fails(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        self.assertIn("trap 'cleanup_failure; exit 1' INT TERM", source)
 
     def test_api_module_imports_without_fastapi(self):
         code = f"""

@@ -34,7 +34,12 @@ PY
 }
 
 rollback() {
-  if [[ -e "$BACKUP" && ! -e "$TARGET" ]]; then mv "$BACKUP" "$TARGET"; fi
+  if [[ -e "$BACKUP" ]]; then
+    # A second rename may already have placed the new target.  Preserve the
+    # previous plugin deterministically until backup removal marks commit.
+    rm -rf "$TARGET"
+    mv "$BACKUP" "$TARGET"
+  fi
   rm -rf "$STAGED"
 }
 committed=0
@@ -54,6 +59,7 @@ verify_manifest "$STAGED"
 if [[ -e "$TARGET" ]]; then mv "$TARGET" "$BACKUP"; fi
 if [[ "${NEGATIVECUTTER_TEST_FAIL_SECOND_RENAME:-0}" == 1 ]]; then false; fi
 mv "$STAGED" "$TARGET"
+if [[ "${NEGATIVECUTTER_TEST_FAIL_AFTER_SWAP:-0}" == 1 ]]; then false; fi
 rm -rf "$BACKUP"
 committed=1
 trap - EXIT INT TERM
