@@ -62,6 +62,7 @@ NegativeCutter-135.lrplugin/tests/*
 !NegativeCutter-135.lrplugin/tests/manual_preview_harness.lua
 !NegativeCutter-135.lrplugin/tests/test_process_pipeline.lua
 !NegativeCutter-135.lrplugin/tests/test_recognition_ui_contract.py
+!NegativeCutter-135.lrplugin/tests/test_recognition_progress.lua
 NegativeCutter-135.lrplugin/scripts/
 NegativeCutter-135.lrplugin/CLAUDE.md
 NegativeCutter-135.lrplugin/debug_visualize.py

@@ -4,6 +4,7 @@ local LrDialogs = import 'LrDialogs'
 local LrLogger = import 'LrLogger'
 local LrPathUtils = import 'LrPathUtils'
 local LrPrefs = import 'LrPrefs'
+local LrProgressScope = import 'LrProgressScope'
 local LrTasks = import 'LrTasks'
 local LrView = import 'LrView'
 
@@ -80,50 +81,92 @@ local function previewDetection(detection, runtime, title)
   }, runtime)
 end
 
-local function runRecognition(catalog, photos, settings, runtime)
-  local stats = { total = #photos, terminal = 0, created = 0, errors = {}, canceled = false }
+local function runRecognition(catalog, photos, settings, runtime, adapters)
+  adapters = adapters or {}
+  local progress = assert(adapters.progress, "progress adapter is required")
+  local totalPhotos, terminalPhotos = #photos, 0
+  local stats = { total = totalPhotos, created = 0, errors = {}, canceled = false, partialCurrent = false }
   local sharedOffsets
-  for index, photo in ipairs(photos) do
-    local detection, detectError = ProcessAgent.detectPhoto(photo, settings)
-    if not detection then
-      stats.errors[#stats.errors + 1] = tostring(detectError); stats.terminal = stats.terminal + 1
-    else
-      local selected = detection
-      if settings.previewMode == "per_photo" then
-        local preview = previewDetection(detection, runtime, string.format("逐张预览 %d/%d · %s", index, #photos, detection.fileName))
-        if preview.status == "canceled" then stats.canceled = true; break end
-        if preview.status == "error" then
-          stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. preview.error; stats.terminal = stats.terminal + 1
-          selected = nil
-        else
-          selected.frames = preview.frames
-        end
-      elseif settings.previewMode == "batch_uniform" then
-        if not sharedOffsets then
-          local preview = previewDetection(detection, runtime, "整批统一预览 · " .. detection.fileName)
-          if preview.status == "canceled" then stats.canceled = true; break end
+  local function updateCaption(stage, fileName, photoIndex, frameIndex, frameTotal)
+    local caption
+    if stage == "thumbnail" then caption = string.format("%d/%d · 生成缩略图 · %s", photoIndex, totalPhotos, fileName)
+    elseif stage == "recognition" then caption = string.format("%d/%d · 识别边界 · %s", photoIndex, totalPhotos, fileName)
+    elseif stage == "preview" then caption = string.format("%d/%d · 预览确认 · %s", photoIndex, totalPhotos, fileName)
+    elseif stage == "frame" then caption = string.format("%d/%d · 创建帧 %d/%d · %s", photoIndex, totalPhotos, frameIndex, frameTotal, fileName)
+    else caption = string.format("%d/%d · %s", photoIndex, totalPhotos, fileName) end
+    progress:setCaption(caption)
+  end
+  local function markTerminal()
+    terminalPhotos = terminalPhotos + 1
+    progress:setPortionComplete(terminalPhotos, totalPhotos)
+  end
+  local ok, unexpected = xpcall(function()
+    for index, photo in ipairs(photos) do
+      if progress:isCanceled() then stats.canceled = true; break end
+      local fallbackName = photo.getFormattedMetadata and photo:getFormattedMetadata("fileName") or "scan"
+      local detectOptions = {
+        expectedFrames = settings.expectedFrames, formatHint = settings.formatHint,
+        filmType = settings.filmType, thumbnailWidth = settings.thumbnailWidth,
+        onStage = function(stage) updateCaption(stage, fallbackName, index) end,
+      }
+      local detection, detectError = ProcessAgent.detectPhoto(photo, detectOptions)
+      if progress:isCanceled() then stats.canceled = true; break end
+      if not detection then
+        stats.errors[#stats.errors + 1] = fallbackName .. ": " .. tostring(detectError)
+        markTerminal()
+      else
+        local selected = detection
+        if settings.previewMode == "per_photo" then
+          updateCaption("preview", detection.fileName, index)
+          local preview = previewDetection(detection, runtime, string.format("逐张预览 %d/%d · %s", index, totalPhotos, detection.fileName))
+          if progress:isCanceled() or preview.status == "canceled" then stats.canceled = true; break end
           if preview.status == "error" then
-            stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. preview.error; stats.canceled = true; break
+            stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. preview.error; markTerminal(); selected = nil
+          else selected.frames = preview.frames end
+        elseif settings.previewMode == "batch_uniform" then
+          if not sharedOffsets then
+            updateCaption("preview", detection.fileName, index)
+            local preview = previewDetection(detection, runtime, "整批统一预览 · " .. detection.fileName)
+            if progress:isCanceled() or preview.status == "canceled" then stats.canceled = true; break end
+            if preview.status == "error" then
+              stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. preview.error; markTerminal(); selected = nil
+            else
+              sharedOffsets = { topPx = preview.offsets.topPx, bottomPx = preview.offsets.bottomPx,
+                leftPx = preview.offsets.leftPx, rightPx = preview.offsets.rightPx }
+              selected.frames = preview.frames
+            end
+          else
+            local adjusted, adjustError = ProcessAgent.adjustDetection(detection, sharedOffsets)
+            if not adjusted then
+              stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. tostring(adjustError); markTerminal(); selected = nil
+            else selected = adjusted end
           end
-          sharedOffsets = { topPx = preview.offsets.topPx, bottomPx = preview.offsets.bottomPx,
-            leftPx = preview.offsets.leftPx, rightPx = preview.offsets.rightPx }
-          selected.frames = preview.frames
-        else
-          local adjusted, adjustError = ProcessAgent.adjustDetection(detection, sharedOffsets)
-          if not adjusted then
-            stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. tostring(adjustError); stats.terminal = stats.terminal + 1
-            selected = nil
-          else selected = adjusted end
         end
-      end
-      if selected then
-        local summary = ProcessAgent.createVirtualCopies(catalog, selected, {})
-        stats.created = stats.created + summary.createdCount
-        for _, message in ipairs(summary.errors) do stats.errors[#stats.errors + 1] = message end
-        stats.terminal = stats.terminal + 1
+        if selected then
+          if progress:isCanceled() then stats.canceled = true; break end
+          local summary = ProcessAgent.createVirtualCopies(catalog, selected, {
+            isCanceled = function() return progress:isCanceled() end,
+            onStage = function(stage, frameIndex, frameTotal)
+              updateCaption(stage, detection.fileName, index, frameIndex, frameTotal)
+            end,
+          })
+          stats.created = stats.created + summary.createdCount
+          for _, message in ipairs(summary.errors) do stats.errors[#stats.errors + 1] = message end
+          if summary.status == "canceled" or progress:isCanceled() then
+            stats.canceled = true
+            if summary.attemptedFrames > 0 or summary.createdCount > 0 then stats.partialCurrent = true end
+            break
+          end
+          markTerminal()
+        end
       end
     end
-  end
+  end, debug.traceback)
+  progress:done()
+  if not ok then stats.unexpectedError = tostring(unexpected) end
+  stats.processedPhotos = terminalPhotos
+  stats.unprocessedPhotos = totalPhotos - terminalPhotos
+  stats.terminal = terminalPhotos
   return stats
 end
 
@@ -134,8 +177,15 @@ LrTasks.startAsyncTask(function()
   local settings = chooseSettings(#photos); if not settings then return end
   local runtime = PreviewRuntime.current()
   if not runtime then LrDialogs.message("NegativeCutter", "预览运行时尚未初始化，请重启 Lightroom 后重试", "critical"); return end
-  local stats = runRecognition(catalog, photos, settings, runtime)
-  local title = stats.canceled and "NegativeCutter - 已取消" or (#stats.errors > 0 and "NegativeCutter - 部分完成" or "NegativeCutter - 完成")
-  LrDialogs.message(title, string.format("已完成 %d/%d 个文件，创建 %d 个虚拟副本，错误 %d 个",
-    stats.terminal, stats.total, stats.created, #stats.errors), #stats.errors > 0 and "warning" or "info")
+  local progress = LrProgressScope { title = "NegativeCutter - 检测帧", caption = "准备处理" }
+  progress:setCancelable(true)
+  local stats = runRecognition(catalog, photos, settings, runtime, { progress = progress })
+  local body = string.format("已处理 %d 个，未处理 %d 个，创建 %d 个虚拟副本，错误 %d 个",
+    stats.processedPhotos, stats.unprocessedPhotos, stats.created, #stats.errors)
+  if stats.unexpectedError then LrDialogs.message("NegativeCutter - 未预期错误", body .. "\n\n" .. stats.unexpectedError, "critical")
+  elseif stats.canceled then LrDialogs.message("NegativeCutter - 已取消", body .. (stats.partialCurrent and "\n当前照片已保留部分成功副本。" or ""), "info")
+  elseif #stats.errors > 0 then LrDialogs.message("NegativeCutter - 部分完成", body, "warning")
+  else LrDialogs.message("NegativeCutter - 完成", body, "info") end
 end)
+
+return { runRecognition = runRecognition }

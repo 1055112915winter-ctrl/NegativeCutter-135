@@ -48,6 +48,24 @@ class RecognitionUIContractTests(unittest.TestCase):
         for forbidden in ("PreviewAgent", "PreviewRuntime", "previewModeDetect", "previewModeBatch"):
             self.assertNotIn(forbidden, source)
 
+    def test_native_progress_and_terminal_accounting_contracts_are_explicit(self):
+        for source in (self.detect, self.batch):
+            for token in (
+                "LrProgressScope",
+                "setPortionComplete(terminalPhotos, totalPhotos)",
+                "processedPhotos = terminalPhotos",
+                "unprocessedPhotos = totalPhotos - terminalPhotos",
+                "partialCurrent = true",
+                "progress:done()",
+                "progress:setCancelable(true)",
+                "unexpectedError",
+                'stage == "thumbnail"',
+                'stage == "recognition"',
+                'stage == "frame"',
+            ):
+                self.assertIn(token, source)
+            self.assertIn("progress:isCanceled()", source)
+
 
 if __name__ == "__main__":
     unittest.main()
