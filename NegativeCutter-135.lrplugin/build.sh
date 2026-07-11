@@ -82,10 +82,11 @@ python3 - "$STAGE/$PLUGIN_DIR" <<'PY'
 import hashlib, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-files = sorted(p for p in root.rglob('*') if p.is_file() and p.name != 'RELEASE-MANIFEST.sha256')
-if any(p.is_symlink() for p in files): raise SystemExit('ERROR: symlink in release stage')
-(root / 'RELEASE-MANIFEST.sha256').write_text(''.join(
-    f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(root).as_posix()}\n' for p in files), encoding='utf-8')
+entries=[]
+for p in sorted(root.rglob('*')):
+    if p.is_symlink(): entries.append(f'link  {p.relative_to(root).as_posix()} -> {p.readlink()}\n')
+    elif p.is_file() and p.name != 'RELEASE-MANIFEST.sha256': entries.append(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(root).as_posix()}\n')
+(root / 'RELEASE-MANIFEST.sha256').write_text(''.join(entries), encoding='utf-8')
 PY
 
 verify_manifest() {
@@ -93,17 +94,21 @@ verify_manifest() {
 import hashlib, re, sys
 from pathlib import Path
 root = Path(sys.argv[1]); manifest = root / 'RELEASE-MANIFEST.sha256'
-lines = manifest.read_text(encoding='utf-8').splitlines()
-seen = set(); expected = set()
+lines = manifest.read_text(encoding='utf-8').splitlines(); seen = set(); expected = set(); root_real=root.resolve()
 for line in lines:
-    m = re.fullmatch(r'([0-9a-f]{64})  ([^/][^\n]*)', line)
-    if not m: raise SystemExit('ERROR: malformed manifest')
-    digest, rel = m.groups()
+    target=None
+    if line.startswith('link  '): rel, sep, target=line[6:].partition(' -> '); digest=None; assert sep
+    else:
+        m = re.fullmatch(r'([0-9a-f]{64})  ([^/][^\n]*)', line)
+        if not m: raise SystemExit('ERROR: malformed manifest')
+        digest, rel = m.groups()
     if rel.startswith('/') or '..' in Path(rel).parts or rel in seen: raise SystemExit('ERROR: unsafe manifest path')
     seen.add(rel); expected.add(rel)
     path = root / rel
-    if not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest: raise SystemExit('ERROR: manifest checksum mismatch')
-actual = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and p.name != manifest.name}
+    if target is not None:
+        if not path.is_symlink() or Path(target).is_absolute() or not (path.parent / target).resolve().is_relative_to(root_real): raise SystemExit('ERROR: unsafe manifest symlink')
+    elif not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest: raise SystemExit('ERROR: manifest checksum mismatch')
+actual = {p.relative_to(root).as_posix() for p in root.rglob('*') if (p.is_file() or p.is_symlink()) and p.name != manifest.name}
 if actual != expected: raise SystemExit('ERROR: manifest exact release file set mismatch')
 PY
 }

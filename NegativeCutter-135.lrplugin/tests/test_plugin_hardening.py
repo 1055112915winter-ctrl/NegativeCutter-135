@@ -14,7 +14,9 @@ class PluginHardeningTests(unittest.TestCase):
     def _write_manifest(self, plugin: Path):
         entries = []
         for path in sorted(plugin.rglob("*")):
-            if path.is_file() and path.name != "RELEASE-MANIFEST.sha256":
+            if path.is_symlink():
+                entries.append(f"link  {path.relative_to(plugin).as_posix()} -> {path.readlink()}\n")
+            elif path.is_file() and path.name != "RELEASE-MANIFEST.sha256":
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()
                 entries.append(f"{digest}  {path.relative_to(plugin).as_posix()}\n")
         (plugin / "RELEASE-MANIFEST.sha256").write_text("".join(entries), encoding="utf-8")
@@ -92,6 +94,19 @@ class PluginHardeningTests(unittest.TestCase):
                     proc = subprocess.run([str(installer), str(source)], env={**self._codesign_env(root), "NEGATIVECUTTER_MODULES_DIR": str(modules), "NEGATIVECUTTER_TEST_SKIP_CODESIGN": "1"}, check=False, capture_output=True, text=True)
                     self.assertNotEqual(proc.returncode, 0)
                     self.assertEqual((target / "keep").read_bytes(), b"unchanged")
+
+    def test_install_accepts_safe_internal_symlink_and_rejects_unsafe_targets(self):
+        installer = PLUGIN / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); modules = root / "modules"; modules.mkdir()
+            for name, target, expected in (("safe", "Info.lua", 0), ("absolute", "/etc/passwd", 1), ("escape", "../escape", 1)):
+                with self.subTest(name=name):
+                    source = self._fixture_plugin(root / name)
+                    (source / "link").symlink_to(target)
+                    self._write_manifest(source)
+                    env = {**self._codesign_env(root), "NEGATIVECUTTER_MODULES_DIR": str(modules), "NEGATIVECUTTER_TEST_SKIP_CODESIGN": "1"}
+                    proc = subprocess.run([str(installer), str(source)], env=env, check=False, capture_output=True, text=True)
+                    self.assertEqual(proc.returncode, expected, proc.stderr)
 
     def test_install_rejects_bad_signature_and_preserves_target(self):
         installer = PLUGIN / "install.sh"

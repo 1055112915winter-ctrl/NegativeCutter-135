@@ -20,15 +20,20 @@ import hashlib, re, sys
 from pathlib import Path
 root = Path(sys.argv[1]); manifest = root / 'RELEASE-MANIFEST.sha256'
 if not manifest.is_file() or manifest.is_symlink(): raise SystemExit('ERROR: missing manifest')
-seen=set(); expected=set()
+seen=set(); expected=set(); root_real=root.resolve()
 for line in manifest.read_text(encoding='utf-8').splitlines():
-    m=re.fullmatch(r'([0-9a-f]{64})  ([^/][^\n]*)', line)
-    if not m: raise SystemExit('ERROR: malformed manifest')
-    digest, rel=m.groups()
+    target=None
+    if line.startswith('link  '): rel, sep, target=line[6:].partition(' -> '); digest=None; assert sep
+    else:
+        m=re.fullmatch(r'([0-9a-f]{64})  ([^/][^\n]*)', line)
+        if not m: raise SystemExit('ERROR: malformed manifest')
+        digest, rel=m.groups()
     if rel.startswith('/') or '..' in Path(rel).parts or rel in seen: raise SystemExit('ERROR: unsafe manifest path')
     seen.add(rel); expected.add(rel); path=root/rel
-    if not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest: raise SystemExit('ERROR: manifest checksum mismatch')
-actual={p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and p.name != manifest.name}
+    if target is not None:
+        if not path.is_symlink() or Path(target).is_absolute() or not (path.parent / target).resolve().is_relative_to(root_real): raise SystemExit('ERROR: unsafe manifest symlink')
+    elif not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest: raise SystemExit('ERROR: manifest checksum mismatch')
+actual={p.relative_to(root).as_posix() for p in root.rglob('*') if (p.is_file() or p.is_symlink()) and p.name != manifest.name}
 if actual != expected: raise SystemExit('ERROR: manifest exact release file set mismatch')
 PY
 }
@@ -52,8 +57,7 @@ trap finish EXIT
 trap 'exit 1' INT TERM
 verify_manifest "$SOURCE"
 [[ "${NEGATIVECUTTER_TEST_SKIP_CODESIGN:-0}" == 1 ]] || codesign --verify --deep --strict "$SOURCE/NegativeCutter"
-cp -RL "$SOURCE" "$STAGED"
-find "$STAGED" -type l -print -quit | grep -q . && { echo "ERROR: symlink in staged plugin" >&2; exit 1; }
+ditto "$SOURCE" "$STAGED"
 verify_manifest "$STAGED"
 [[ "${NEGATIVECUTTER_TEST_SKIP_CODESIGN:-0}" == 1 ]] || codesign --verify --deep --strict "$STAGED/NegativeCutter"
 if [[ -e "$TARGET" ]]; then mv "$TARGET" "$BACKUP"; fi
