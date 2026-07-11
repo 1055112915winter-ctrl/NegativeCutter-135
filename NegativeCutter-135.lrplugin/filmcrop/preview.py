@@ -31,9 +31,9 @@ def _axis_bounds(start, end, size):
 
 
 def _frame_pixel(frame, name, relative_name, size, default):
-    if name in frame:
-        return _finite_number(frame[name], default)
-    return _finite_number(frame.get(relative_name, default / size), default / size) * size
+    if relative_name in frame:
+        return _finite_number(frame[relative_name], default / size) * size
+    return _finite_number(frame.get(name, default), default)
 
 
 def adjust_frames(frames, source_width, source_height, offsets, orientation=1):

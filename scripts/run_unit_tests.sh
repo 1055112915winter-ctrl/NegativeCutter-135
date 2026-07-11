@@ -21,3 +21,4 @@ python3 scripts/run_lua_test.py NegativeCutter-135.lrplugin/tests/test_applier_r
 python3 scripts/run_lua_test.py NegativeCutter-135.lrplugin/tests/test_process_agent_orientation.lua
 python3 scripts/run_lua_test.py NegativeCutter-135.lrplugin/tests/test_preview_agent.lua
 python3 scripts/run_lua_test.py NegativeCutter-135.lrplugin/tests/test_preview_runtime.lua
+python3 scripts/run_lua_test.py NegativeCutter-135.lrplugin/tests/test_process_pipeline.lua

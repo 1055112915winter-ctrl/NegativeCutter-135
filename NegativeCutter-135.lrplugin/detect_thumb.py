@@ -93,7 +93,7 @@ def _render_preview_cli(args):
     except Exception as exc:
         _log(f"render preview FAILED: {exc}\n{traceback.format_exc()}")
         return _preview_error(exc)
-    print(json.dumps({"previewPath": str(output), "frameCount": len(adjusted)}, separators=(",", ":")))
+    print(json.dumps({"previewPath": str(output), "frameCount": len(adjusted), "frames": adjusted}, separators=(",", ":")))
     return 0
 
 

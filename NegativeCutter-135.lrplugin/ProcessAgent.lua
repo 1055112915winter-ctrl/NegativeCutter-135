@@ -43,6 +43,59 @@ end
 
 local ProcessAgent = {}
 
+local function deepCopy(value)
+  if type(value) ~= "table" then return value end
+  local copy = {}
+  for key, item in pairs(value) do copy[key] = deepCopy(item) end
+  return copy
+end
+
+local function finiteNumber(value, default)
+  local number = tonumber(value)
+  if not number or number ~= number or number == math.huge or number == -math.huge then return default or 0 end
+  return number
+end
+
+local function bankersRound(value)
+  local lower = math.floor(value)
+  local fraction = value - lower
+  if fraction < 0.5 then return lower end
+  if fraction > 0.5 then return lower + 1 end
+  return lower % 2 == 0 and lower or lower + 1
+end
+
+local function roundedRelative(value)
+  return bankersRound(value * 1000000) / 1000000
+end
+
+local function axisBounds(first, last, size)
+  size = math.floor(size)
+  local minimum = math.min(20, size)
+  first = math.max(0, math.min(bankersRound(first), size))
+  last = math.max(0, math.min(bankersRound(last), size))
+  if last < first then first, last = last, first end
+  if last - first < minimum then
+    last = math.min(size, first + minimum)
+    first = math.max(0, last - minimum)
+  end
+  return first, last
+end
+
+local function shellEscape(value)
+  if type(value) ~= "string" then return '""' end
+  return '"' .. value:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('%$', '\\$')
+    :gsub('`', '\\`'):gsub('\n', '\\n') .. '"'
+end
+
+local function packagedEnginePath()
+  local onedir = LrPathUtils.child(pluginPath, "NegativeCutter")
+  local executable = LrPathUtils.child(onedir, "NegativeCutter")
+  if fileExists(executable) then return executable end
+  executable = LrPathUtils.child(pluginPath, "NegativeCutter")
+  if fileExists(executable) then return executable end
+  return nil
+end
+
 -- ------------------------------------------------------------------
 -- findPythonPath — 统一查找 Python 3 解释器
 -- ------------------------------------------------------------------
@@ -461,102 +514,180 @@ function ProcessAgent.extractThumbnail(photo, maxWidth)
 end
 
 -- ------------------------------------------------------------------
--- detectAndCrop — 完整检测+裁剪流程（不含预览对话框）
--- 返回: createdCount, errorMessage (nil on success)
+-- renderPreview — packaged-engine preview invocation. Temporary request and
+-- result files are owned by this call; the dialog directory remains caller-owned.
 -- ------------------------------------------------------------------
-function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, formatHint)
-  local baseName = fileName:gsub("%..+$", "")
+function ProcessAgent.renderPreview(request)
+  request = request or {}
+  if type(request.frames) ~= "table" or type(request.thumbnailPath) ~= "string"
+    or type(request.outputPath) ~= "string" then return nil, "invalid preview render request" end
+  local width, height = tonumber(request.sourceWidth), tonumber(request.sourceHeight)
+  if not width or width <= 0 or not height or height <= 0 then return nil, "invalid preview source dimensions" end
+  local executable = packagedEnginePath()
+  if not executable then return nil, "检测引擎不存在: 未找到 NegativeCutter 可执行文件" end
 
-  -- 步骤1: 获取缩略图
-  local thumbPath, thumbErr = ProcessAgent.extractThumbnail(photo)
-  if not thumbPath then
-    logger:trace("缩略图获取失败: " .. (thumbErr or "未知") .. "，尝试原图 fallback")
+  local framesPath = request.outputPath .. ".frames.json"
+  local resultPath = request.outputPath .. ".result.json"
+  local framesFile, writeError = io.open(framesPath, "w")
+  if not framesFile then return nil, "无法写入预览帧: " .. tostring(writeError) end
+  local encodedOk, encoded = pcall(json.encode, { frames = deepCopy(request.frames) })
+  if not encodedOk then framesFile:close(); os.remove(framesPath); return nil, tostring(encoded) end
+  framesFile:write(encoded); framesFile:close()
+
+  local offsets = request.offsets or {}
+  local command = string.format(
+    '%s --render-preview --input %s --frames-json %s --source-width %d --source-height %d --top-px %.6f --bottom-px %.6f --left-px %.6f --right-px %.6f --output %s > %s 2>&1',
+    shellEscape(executable), shellEscape(request.thumbnailPath), shellEscape(framesPath), width, height,
+    finiteNumber(offsets.topPx), finiteNumber(offsets.bottomPx), finiteNumber(offsets.leftPx), finiteNumber(offsets.rightPx),
+    shellEscape(request.outputPath), shellEscape(resultPath))
+  local exitCode = LrTasks.execute(command)
+  local resultFile = io.open(resultPath, "r")
+  local output = resultFile and (resultFile:read("*a") or "") or ""
+  if resultFile then resultFile:close() end
+  os.remove(framesPath); os.remove(resultPath)
+  local jsonLine = output:match("^([^\r\n]+)") or ""
+  local decodedOk, payload = pcall(json.decode, jsonLine)
+  if exitCode ~= 0 then
+    return nil, decodedOk and payload and payload.error or (jsonLine ~= "" and jsonLine or "preview renderer failed")
   end
+  if not decodedOk or type(payload) ~= "table" or payload.error then return nil, "invalid preview renderer output" end
+  if payload.previewPath ~= request.outputPath or type(payload.frames) ~= "table" or not fileExists(request.outputPath) then
+    return nil, "preview renderer output validation failed"
+  end
+  return { outputPath = request.outputPath, frames = deepCopy(payload.frames) }, nil
+end
 
-  -- 步骤2: Python 分析（缩略图失败时 fallback 到原图）
+local function refreshAbsoluteFrames(frames, width, height)
+  for _, frame in ipairs(frames or {}) do
+    local top = math.max(0, math.min(bankersRound(finiteNumber(frame.relativeTop, 0) * height), height))
+    local bottom = math.max(0, math.min(bankersRound(finiteNumber(frame.relativeBottom, 1) * height), height))
+    local left = math.max(0, math.min(bankersRound(finiteNumber(frame.relativeLeft, 0) * width), width))
+    local right = math.max(0, math.min(bankersRound(finiteNumber(frame.relativeRight, 1) * width), width))
+    if bottom < top then top, bottom = bottom, top end
+    if right < left then left, right = right, left end
+    frame.top, frame.bottom, frame.left, frame.right = top, bottom, left, right
+    frame.relativeTop, frame.relativeBottom = roundedRelative(top / height), roundedRelative(bottom / height)
+    frame.relativeLeft, frame.relativeRight = roundedRelative(left / width), roundedRelative(right / width)
+    frame.sourceWidth, frame.sourceHeight = width, height
+  end
+end
+
+function ProcessAgent.detectPhoto(photo, options)
+  options = options or {}
+  local onStage = options.onStage or function() end
+  local fileName = photo:getFormattedMetadata("fileName")
   local originalPath = photo:getRawMetadata("path")
-  local photoDimensions = photo:getRawMetadata("dimensions")
-  local lrWidth = photoDimensions and photoDimensions.width or nil
-  local lrHeight = photoDimensions and photoDimensions.height or nil
-  local result, analyzeError = ProcessAgent.analyzeWithPython(
-    thumbPath, expectedFrames, originalPath, formatHint, lrWidth, lrHeight)
-  if not result then
-    return 0, "分析失败 - " .. (analyzeError or "未知")
+  onStage("thumbnail")
+  local thumbnailPath, thumbnailError = ProcessAgent.extractThumbnail(photo, options.thumbnailWidth or 2048)
+  if not thumbnailPath then
+    if type(originalPath) ~= "string" or originalPath == "" then
+      return nil, "缩略图获取失败 - " .. tostring(thumbnailError or "未知")
+    end
+    thumbnailPath = originalPath
   end
-
-  -- 步骤3: 方向对齐
+  local dimensions = photo:getRawMetadata("dimensions") or {}
+  onStage("recognition")
+  local result, recognitionError = ProcessAgent.analyzeWithPython(thumbnailPath, options.expectedFrames or prefs.expectedFrames or 6,
+    originalPath, options.formatHint, dimensions.width, dimensions.height)
+  if not result or type(result.frames) ~= "table" or #result.frames == 0 then
+    return nil, "分析失败 - " .. tostring(recognitionError or "未检测到帧")
+  end
   result = ProcessAgent.directionAlign(result, photo)
-
-  -- 步骤4: 为每帧创建虚拟副本并应用裁剪
+  local width, height = tonumber(result.sourceWidth), tonumber(result.sourceHeight)
+  if not width or width <= 0 or not height or height <= 0 then return nil, "检测结果尺寸无效" end
+  onStage("cleanup")
   local frames = result.frames
-  local createdCount = 0
-
-  if #frames > 0 then
-    local f0 = frames[1]
-    logger:trace(string.format("detectAndCrop frame1 coords: top=%.6f bottom=%.6f left=%.6f right=%.6f",
-      f0.relativeTop or 0, f0.relativeBottom or 0, f0.relativeLeft or 0, f0.relativeRight or 0))
-  end
-
-  -- 使用 CropCleaner 按胶片类型清理边界
-  local filmType = prefs.filmType or "negative"
+  local filmType = options.filmType or prefs.filmType or "negative"
   CropCleaner.cleanFrames(frames, result.sourceWidth, result.sourceHeight, filmType)
+  refreshAbsoluteFrames(frames, width, height)
+  return {
+    photo = photo, fileName = fileName, thumbnailPath = thumbnailPath,
+    frames = deepCopy(result.frames), sourceWidth = width, sourceHeight = height,
+    cropAngle = result.cropAngle or 0,
+  }, nil
+end
 
-  for frameIdx, frame in ipairs(frames) do
-    catalog:setSelectedPhotos(photo, {photo})
-    LrTasks.sleep(0.1)
+function ProcessAgent.adjustDetection(detection, offsets)
+  if type(detection) ~= "table" or type(detection.frames) ~= "table" then return nil, "invalid detection" end
+  if detection._previewAdjusted then return nil, "detection already adjusted" end
+  local width, height = tonumber(detection.sourceWidth), tonumber(detection.sourceHeight)
+  if not width or width <= 0 or not height or height <= 0 then return nil, "invalid detection dimensions" end
+  offsets = offsets or {}
+  local adjusted = deepCopy(detection)
+  adjusted._previewAdjusted = true
+  for _, frame in ipairs(adjusted.frames) do
+    local top = finiteNumber(frame.relativeTop, 0) * height - finiteNumber(offsets.topPx)
+    local bottom = finiteNumber(frame.relativeBottom, 1) * height + finiteNumber(offsets.bottomPx)
+    local left = finiteNumber(frame.relativeLeft, 0) * width - finiteNumber(offsets.leftPx)
+    local right = finiteNumber(frame.relativeRight, 1) * width + finiteNumber(offsets.rightPx)
+    top, bottom = axisBounds(top, bottom, height)
+    left, right = axisBounds(left, right, width)
+    frame.top, frame.bottom, frame.left, frame.right = top, bottom, left, right
+    frame.relativeTop, frame.relativeBottom = roundedRelative(top / height), roundedRelative(bottom / height)
+    frame.relativeLeft, frame.relativeRight = roundedRelative(left / width), roundedRelative(right / width)
+    frame.sourceWidth, frame.sourceHeight = width, height
+  end
+  return adjusted, nil
+end
 
-    local virtualCopy = nil
-    catalog:withWriteAccessDo("创建虚拟副本", function(context)
+function ProcessAgent.createVirtualCopies(catalog, detection, options)
+  options = options or {}
+  local summary = { status = "success", createdCount = 0, attemptedFrames = 0, errors = {} }
+  local isCanceled, onStage = options.isCanceled or function() return false end, options.onStage or function() end
+  local baseName = tostring(detection.fileName or "scan"):gsub("%..+$", "")
+  for frameIndex, frame in ipairs(detection.frames or {}) do
+    if isCanceled() then summary.status = "canceled"; return summary end
+    summary.attemptedFrames = summary.attemptedFrames + 1
+    onStage("frame", frameIndex, #(detection.frames or {}))
+    catalog:setSelectedPhotos(detection.photo, { detection.photo }); LrTasks.sleep(0.1)
+    local virtualCopy
+    catalog:withWriteAccessDo("创建虚拟副本", function()
       local copies = catalog:createVirtualCopies()
-      if copies and #copies > 0 then
-        virtualCopy = copies[1]
-      end
+      if copies and #copies > 0 then virtualCopy = copies[1] end
     end)
-
-    if virtualCopy then
-      catalog:setSelectedPhotos(virtualCopy, {virtualCopy})
-      LrTasks.sleep(0.2)
-
-      catalog:withWriteAccessDo("重置裁剪", function(context)
-        ApplierAgent.resetCrop(virtualCopy)
+    if not virtualCopy then
+      summary.errors[#summary.errors + 1] = string.format("%s: 第%d帧虚拟副本创建失败", detection.fileName or "scan", frameIndex)
+    else
+      catalog:setSelectedPhotos(virtualCopy, { virtualCopy }); LrTasks.sleep(0.2)
+      catalog:withWriteAccessDo("重置裁剪", function() ApplierAgent.resetCrop(virtualCopy) end); LrTasks.sleep(0.8)
+      local applyError
+      catalog:withWriteAccessDo("应用裁剪", function()
+        local success, err = ApplierAgent.applyCrop(virtualCopy, {
+          top = frame.relativeTop, bottom = frame.relativeBottom,
+          left = frame.relativeLeft or 0, right = frame.relativeRight or 1,
+          sourceWidth = detection.sourceWidth, sourceHeight = detection.sourceHeight,
+          cropAngle = detection.cropAngle or 0,
+        })
+        if not success then applyError = err or "未知错误" end
       end)
-      LrTasks.sleep(0.8)
-
-      local sourceW = result.sourceWidth
-      local sourceH = result.sourceHeight
-      if sourceW and sourceW > 0 and sourceH and sourceH > 0 then
-        local applyErr = nil
-        catalog:withWriteAccessDo("应用裁剪", function(context)
-          local success, err = ApplierAgent.applyCrop(virtualCopy, {
-            top = frame.relativeTop,
-            bottom = frame.relativeBottom,
-            left = frame.relativeLeft or 0,
-            right = frame.relativeRight or 1,
-            sourceWidth = sourceW,
-            sourceHeight = sourceH,
-            cropAngle = result.cropAngle or 0
-          })
-          if not success then applyErr = err end
-        end)
-        if applyErr then
-          logger:error("裁剪应用失败: " .. applyErr)
-        end
+      if applyError then
+        summary.errors[#summary.errors + 1] = string.format("%s: 第%d帧裁剪应用失败 - %s", detection.fileName or "scan", frameIndex, applyError)
+      else
+        summary.createdCount = summary.createdCount + 1
       end
-
-      local copyName = string.format("%s_帧%02d", baseName, frameIdx)
-      local ok, renameErr = pcall(function()
-        virtualCopy:setRawMetadata('copyName', copyName)
+      local renamed, renameError = pcall(function()
+        virtualCopy:setRawMetadata("copyName", string.format("%s_帧%02d", baseName, frameIndex))
       end)
-      if not ok then
-        logger:trace("虚拟副本重命名失败: " .. tostring(renameErr))
+      if not renamed then
+        summary.errors[#summary.errors + 1] = string.format("%s: 第%d帧重命名失败 - %s", detection.fileName or "scan", frameIndex, tostring(renameError))
       end
-
-      createdCount = createdCount + 1
       LrTasks.sleep(0.2)
     end
   end
+  if #summary.errors > 0 then summary.status = "partial_failure" end
+  return summary
+end
 
-  return createdCount, nil
+-- Legacy two-return wrapper retained for existing no-preview and HTTP-adjacent callers.
+function ProcessAgent.detectAndCrop(catalog, photo, expectedFrames, fileName, formatHint)
+  local detection, detectionError = ProcessAgent.detectPhoto(photo, {
+    expectedFrames = expectedFrames, formatHint = formatHint, filmType = prefs.filmType,
+  })
+  if not detection then return 0, detectionError end
+  detection.fileName = fileName or detection.fileName
+  local summary = ProcessAgent.createVirtualCopies(catalog, detection, {})
+  if summary.status ~= "success" then return summary.createdCount, table.concat(summary.errors, "; ") end
+  return summary.createdCount, nil
 end
 
 -- ------------------------------------------------------------------

@@ -29,6 +29,15 @@ class LiveCropPreviewTests(unittest.TestCase):
         self.assertEqual((frame["top"], frame["bottom"], frame["left"], frame["right"]), (40, 470, 230, 840))
         self.assertEqual((frame["relativeTop"], frame["relativeBottom"], frame["relativeLeft"], frame["relativeRight"]), (.08, .94, .23, .84))
 
+    def test_adjust_frames_prefers_canonical_relative_fields_over_stale_absolute_fields(self):
+        frame = {"top": 1, "bottom": 2, "left": 3, "right": 4,
+                 "relativeTop": .1, "relativeBottom": .9,
+                 "relativeLeft": .2, "relativeRight": .8}
+
+        adjusted = adjust_frames([frame], 100, 60, {"top": 0, "bottom": 0, "left": 0, "right": 0})[0]
+
+        self.assertEqual((adjusted["top"], adjusted["bottom"], adjusted["left"], adjusted["right"]), (6, 54, 20, 80))
+
     def test_adjust_frames_clamps_and_enforces_minimum_twenty_pixels(self):
         frame = {"top": 2, "bottom": 3, "left": 98, "right": 99}
 
@@ -135,7 +144,14 @@ print(json.dumps({{
 
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stderr, "")
-            self.assertEqual(json.loads(proc.stdout), {"previewPath": str(output), "frameCount": 1})
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload, {
+                "previewPath": str(output),
+                "frameCount": 1,
+                "frames": [{"index": 1, "top": 10, "bottom": 50, "left": 20, "right": 80,
+                            "relativeTop": 0.166667, "relativeBottom": 0.833333,
+                            "relativeLeft": 0.2, "relativeRight": 0.8}],
+            })
             self.assertTrue(output.is_file())
 
     def test_render_preview_cli_returns_json_error_and_exit_two_for_validation_failure(self):
