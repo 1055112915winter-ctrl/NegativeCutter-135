@@ -638,7 +638,7 @@ end
 
 function ProcessAgent.createVirtualCopies(catalog, detection, options)
   options = options or {}
-  local summary = { status = "success", createdCount = 0, attemptedFrames = 0, errors = {} }
+  local summary = { status = "success", createdCount = 0, attemptedFrames = 0, errors = {}, warnings = {} }
   local isCanceled, onStage = options.isCanceled or function() return false end, options.onStage or function() end
   local baseName = tostring(detection.fileName or "scan"):gsub("%..+$", "")
   for frameIndex, frame in ipairs(detection.frames or {}) do
@@ -675,7 +675,10 @@ function ProcessAgent.createVirtualCopies(catalog, detection, options)
         virtualCopy:setRawMetadata("copyName", string.format("%s_帧%02d", baseName, frameIndex))
       end)
       if not renamed then
-        summary.errors[#summary.errors + 1] = string.format("%s: 第%d帧重命名失败 - %s", detection.fileName or "scan", frameIndex, tostring(renameError))
+        -- Lightroom can reject copy-name metadata on catalogs with restricted
+        -- metadata access. The crop itself is already committed, so preserve
+        -- the successful copy and report naming as a nonfatal warning.
+        summary.warnings[#summary.warnings + 1] = string.format("%s: 第%d帧重命名失败 - %s", detection.fileName or "scan", frameIndex, tostring(renameError))
       end
       LrTasks.sleep(0.2)
     end

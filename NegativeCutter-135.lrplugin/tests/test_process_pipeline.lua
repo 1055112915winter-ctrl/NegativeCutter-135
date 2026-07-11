@@ -142,6 +142,22 @@ do
   assert(summary.status == "partial_failure" and summary.attemptedFrames == 2 and summary.createdCount == 1 and #summary.errors == 1, "copy failure accounting mismatch")
   local canceled = ProcessAgent.createVirtualCopies(catalog, detection, { isCanceled = function() return true end })
   assert(canceled.status == "canceled" and canceled.attemptedFrames == 0 and canceled.createdCount == 0, "pre-frame cancellation mismatch")
+
+  local renameCatalog = {
+    setSelectedPhotos = function() end,
+    withWriteAccessDo = function(_, _, fn) fn({}) end,
+    createVirtualCopies = function()
+      return { { setRawMetadata = function() error("copy name locked") end } }
+    end,
+  }
+  applier.applyCrop = function() return true end
+  local renameSummary = ProcessAgent.createVirtualCopies(renameCatalog, {
+    photo = {}, fileName = "scan.tif", sourceWidth = 100, sourceHeight = 60,
+    cropAngle = 0, frames = { { relativeTop = 0.1, relativeBottom = 0.4, relativeLeft = 0.1, relativeRight = 0.4 } },
+  }, {})
+  assert(renameSummary.status == "success" and renameSummary.createdCount == 1
+    and #renameSummary.errors == 0 and #renameSummary.warnings == 1,
+    "rename failures must remain nonfatal warnings")
 end
 
 -- Legacy wrapper remains exactly two-return and delegates to the new stages.
