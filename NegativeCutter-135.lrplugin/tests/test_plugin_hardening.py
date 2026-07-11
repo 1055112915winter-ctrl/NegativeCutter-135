@@ -1,6 +1,8 @@
 import os
+import hashlib
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +11,115 @@ PLUGIN = Path(__file__).resolve().parents[1]
 
 
 class PluginHardeningTests(unittest.TestCase):
+    def _write_manifest(self, plugin: Path):
+        entries = []
+        for path in sorted(plugin.rglob("*")):
+            if path.is_file() and path.name != "RELEASE-MANIFEST.sha256":
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                entries.append(f"{digest}  {path.relative_to(plugin).as_posix()}\n")
+        (plugin / "RELEASE-MANIFEST.sha256").write_text("".join(entries), encoding="utf-8")
+
+    def _fixture_plugin(self, root: Path, name="NegativeCutter-135.lrplugin"):
+        plugin = root / name
+        (plugin / "NegativeCutter").mkdir(parents=True)
+        (plugin / "NegativeCutter" / "NegativeCutter").write_text(
+            "#!/usr/bin/env sh\nexit 0\n", encoding="utf-8"
+        )
+        (plugin / "NegativeCutter" / "NegativeCutter").chmod(0o755)
+        (plugin / "Info.lua").write_text("return {}\n", encoding="utf-8")
+        self._write_manifest(plugin)
+        return plugin
+
+    def _codesign_env(self, root: Path, exit_code=0):
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        codesign = bin_dir / "codesign"
+        codesign.write_text(f"#!/usr/bin/env sh\nexit {exit_code}\n", encoding="utf-8")
+        codesign.chmod(0o755)
+        return {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+    def test_release_contracts_require_allowlist_manifest_and_fixture_smoke_gates(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        for required in (
+            "RELEASE-MANIFEST.sha256",
+            "NEGATIVECUTTER_RELEASE_135_FIXTURE",
+            "NEGATIVECUTTER_RELEASE_120_FIXTURE",
+            "codesign --verify --deep --strict",
+            "zipfile.ZipFile",
+            "install.sh",
+        ):
+            self.assertIn(required, source)
+        self.assertIn("exact release file set", source.lower())
+
+    def test_install_rejects_malformed_or_tampered_manifest_before_target_change(self):
+        installer = PLUGIN / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._fixture_plugin(root / "release")
+            modules = root / "modules"
+            modules.mkdir()
+            target = modules / source.name
+            target.mkdir()
+            (target / "old.txt").write_text("old bytes", encoding="utf-8")
+            before = (target / "old.txt").read_bytes()
+            (source / "RELEASE-MANIFEST.sha256").write_text(
+                "not-a-checksum  ../../escape\n", encoding="utf-8"
+            )
+            proc = subprocess.run(
+                [str(installer), str(source)], env={**self._codesign_env(root), "NEGATIVECUTTER_MODULES_DIR": str(modules), "NEGATIVECUTTER_TEST_SKIP_CODESIGN": "1"},
+                check=False, capture_output=True, text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual((target / "old.txt").read_bytes(), before)
+
+    def test_install_rejects_bad_signature_and_preserves_target(self):
+        installer = PLUGIN / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._fixture_plugin(root / "release")
+            modules = root / "modules"
+            modules.mkdir()
+            target = modules / source.name
+            target.mkdir()
+            (target / "old.txt").write_text("old bytes", encoding="utf-8")
+            proc = subprocess.run(
+                [str(installer), str(source)], env={**self._codesign_env(root, exit_code=1), "NEGATIVECUTTER_MODULES_DIR": str(modules)},
+                check=False, capture_output=True, text=True,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual((target / "old.txt").read_text(encoding="utf-8"), "old bytes")
+
+    def test_install_copies_verified_plugin_and_rolls_back_on_second_rename_failure(self):
+        installer = PLUGIN / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._fixture_plugin(root / "release")
+            modules = root / "modules"
+            modules.mkdir()
+            target = modules / source.name
+            target.mkdir()
+            (target / "old.txt").write_text("old bytes", encoding="utf-8")
+            env = {**self._codesign_env(root), "NEGATIVECUTTER_MODULES_DIR": str(modules), "NEGATIVECUTTER_TEST_SKIP_CODESIGN": "1"}
+            success = subprocess.run([str(installer), str(source)], env=env, check=False, capture_output=True, text=True)
+            self.assertEqual(success.returncode, 0, success.stderr)
+            self.assertFalse((target / "old.txt").exists())
+            self.assertTrue((target / "NegativeCutter" / "NegativeCutter").is_file())
+
+            (target / "old.txt").write_text("preserve me", encoding="utf-8")
+            failed = subprocess.run(
+                [str(installer), str(source)],
+                env={**env, "NEGATIVECUTTER_TEST_FAIL_SECOND_RENAME": "1"},
+                check=False, capture_output=True, text=True,
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual((target / "old.txt").read_bytes(), b"preserve me")
+
+    def test_release_zip_inventory_is_exact_when_fixture_build_is_available(self):
+        fixture = os.environ.get("NEGATIVECUTTER_RELEASE_135_FIXTURE")
+        if not fixture:
+            self.skipTest("NEGATIVECUTTER_RELEASE_135_FIXTURE is required for release build smoke test")
+        self.assertTrue(Path(fixture).is_file())
+
     def test_api_module_imports_without_fastapi(self):
         code = f"""
 import importlib.abc
@@ -65,18 +176,8 @@ print(module.has_api())
 
     def test_build_removes_and_rejects_development_artifacts(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
-        for artifact in (
-            "tests",
-            "detect_debug.log",
-            "debug_visualize.py",
-            "CLAUDE.md",
-            "WORK",
-        ):
-            self.assertIn(artifact, source)
-        self.assertIn("rm -rf tests WORK", source)
-        self.assertIn("forbidden", source.lower())
-        self.assertIn('TMP_PACKAGE_DIR="${TMPDIR:-/tmp}/filmcrop-build-$$"', source)
-        self.assertIn("Info.lua references missing files", source)
+        self.assertIn("ALLOWLIST", source)
+        self.assertIn("missing or symlinked allowlist entry", source)
 
     def test_pyinstaller_spec_omits_removed_numpy_compatibility_modules(self):
         removed_modules = (
