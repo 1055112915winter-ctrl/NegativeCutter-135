@@ -130,9 +130,13 @@ PY
 # --frames 4 --format 645 --original.
 smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
 smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645
-( cd "$STAGE" && zip -qr "$OUTPUT_ZIP" install.sh "$PLUGIN_DIR" )
+ARCHIVE_ROOT="$STAGE/archive-root"
+mkdir "$ARCHIVE_ROOT"
+ditto "$STAGE/install.sh" "$ARCHIVE_ROOT/install.sh"
+ditto "$STAGE/$PLUGIN_DIR" "$ARCHIVE_ROOT/$PLUGIN_DIR"
+ditto -c -k --sequesterRsrc "$ARCHIVE_ROOT" "$OUTPUT_ZIP"
 mkdir -p "$EXTRACTED"
-unzip -q "$OUTPUT_ZIP" -d "$EXTRACTED"
+ditto -x -k "$OUTPUT_ZIP" "$EXTRACTED"
 verify_manifest "$EXTRACTED/$PLUGIN_DIR"
 codesign --verify --deep --strict "$EXTRACTED/$PLUGIN_DIR/NegativeCutter"
 python3 - "$OUTPUT_ZIP" "$STAGE" <<'PY'

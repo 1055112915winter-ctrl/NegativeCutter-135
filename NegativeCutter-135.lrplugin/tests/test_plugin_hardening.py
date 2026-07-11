@@ -191,7 +191,7 @@ class PluginHardeningTests(unittest.TestCase):
     def test_release_gates_both_fixture_smokes_before_archive_and_after_extract(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         staged_120 = 'smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645'
-        archive = '( cd "$STAGE" && zip -qr "$OUTPUT_ZIP" install.sh "$PLUGIN_DIR" )'
+        archive = 'ditto -c -k --sequesterRsrc "$ARCHIVE_ROOT" "$OUTPUT_ZIP"'
         extracted_135 = 'smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm'
         self.assertLess(source.index(staged_120), source.index(archive))
         self.assertLess(source.index(archive), source.index(extracted_135))
@@ -228,6 +228,11 @@ class PluginHardeningTests(unittest.TestCase):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         self.assertIn('ditto "$item" "$STAGE/$PLUGIN_DIR/$item"', source)
         self.assertNotIn("codesign --force --deep --sign - \"$STAGE", source)
+
+    def test_build_uses_ditto_zip_roundtrip_for_signature_preservation(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        self.assertIn("ditto -c -k --sequesterRsrc", source)
+        self.assertIn("ditto -x -k", source)
 
     def test_api_module_imports_without_fastapi(self):
         code = f"""
