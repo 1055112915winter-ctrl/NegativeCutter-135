@@ -185,6 +185,13 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertLess(source.index(build), source.index(sign))
         self.assertLess(source.index(sign), source.index(stage))
 
+    def test_build_cleans_stale_outputs_before_rejecting_unknown_source_entries(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        cleanup = "rm -rf build dist NegativeCutter"
+        inventory = "SOURCE_ALLOWLIST="
+        self.assertLess(source.index(cleanup), source.index(inventory))
+        self.assertIn("ERROR: unclassified source entry", source)
+
     def test_api_module_imports_without_fastapi(self):
         code = f"""
 import importlib.abc

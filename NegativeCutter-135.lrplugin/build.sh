@@ -21,6 +21,9 @@ trap 'rm -rf "$STAGE"' EXIT
 
 [[ -f "$FIXTURE_135" && ! -L "$FIXTURE_135" ]] || { echo "ERROR: missing 135 release fixture: $FIXTURE_135" >&2; exit 1; }
 [[ -f "$FIXTURE_120" && ! -L "$FIXTURE_120" ]] || { echo "ERROR: missing 120 release fixture: $FIXTURE_120" >&2; exit 1; }
+# Prior interrupted builds leave only reproducible output; discard it before
+# classifying the source tree so it can never mask an unknown source entry.
+rm -rf build dist NegativeCutter
 # Classify every source-tree component before touching build output.  Release
 # inclusion is intentionally narrower than this source inventory.
 SOURCE_ALLOWLIST=(.gitignore ApplierAgent.lua BatchProcess.lua CropCleaner.lua DetectFrames.lua Feedback.lua INSTALL.md ImportAgent.lua Info.lua Init.lua LICENSE NegativeCutter NegativeCutter.spec PluginInfoProvider.lua ProcessAgent.lua README.md Shutdown.lua Sponsor.lua THIRD-PARTY-LICENSES.md ThumbnailAgent.lua build.sh detect_thumb.py filmcrop install.sh json.lua tests)
@@ -30,8 +33,7 @@ for source_item in "$SCRIPT_DIR"/* "$SCRIPT_DIR"/.[!.]*; do
   case " ${SOURCE_ALLOWLIST[*]} " in *" $source_name "*) ;; *) echo "ERROR: unclassified source entry: $source_name" >&2; exit 1;; esac
   [[ "$source_name" != marketing && "$source_name" != .claude ]] || { echo "ERROR: forbidden source component: $source_name" >&2; exit 1; }
 done
-# Never validate an old executable or accidentally retain a previous release.
-rm -rf build dist NegativeCutter
+# Never retain a previous release.
 rm -f "$OUTPUT_ZIP"
 python3 -m PyInstaller NegativeCutter.spec
 codesign --force --deep --sign - dist/NegativeCutter
