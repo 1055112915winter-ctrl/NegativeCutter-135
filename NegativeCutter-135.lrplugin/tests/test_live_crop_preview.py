@@ -63,11 +63,11 @@ class LiveCropPreviewTests(unittest.TestCase):
 
         self.assertEqual(frames, original)
 
-    def test_adjust_frames_handles_all_orientations_from_relative_coordinates(self):
+    def test_adjust_frames_canonical_coordinates_are_orientation_independent(self):
         frames = [{"relativeTop": .1, "relativeBottom": .9, "relativeLeft": .2, "relativeRight": .8}]
-        for orientation in (1, 3, 6, 8):
-            with self.subTest(orientation=orientation):
-                adjusted = adjust_frames(frames, 100, 50, {"top": 0, "bottom": 0, "left": 0, "right": 0}, orientation=orientation)[0]
+        for orientation_name in ("normal", "rotated_180", "rotated_90_cw", "rotated_90_ccw"):
+            with self.subTest(orientation=orientation_name):
+                adjusted = adjust_frames(frames, 100, 50, {"top": 0, "bottom": 0, "left": 0, "right": 0})[0]
                 self.assertEqual((adjusted["top"], adjusted["bottom"], adjusted["left"], adjusted["right"]), (5, 45, 20, 80))
 
     def test_render_preview_writes_labeled_jpeg_with_long_edge_at_most_1200(self):
@@ -83,9 +83,43 @@ class LiveCropPreviewTests(unittest.TestCase):
                 self.assertLessEqual(max(preview.size), 1200)
                 self.assertNotEqual(preview.getpixel((50, 50)), (255, 255, 255))
 
+    def test_render_preview_maps_relative_coordinates_to_the_actual_preview_image(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "source.png"
+            output = Path(temp_dir) / "preview.jpg"
+            Image.new("RGB", (100, 60), "white").save(source)
+
+            render_preview(source, [{"index": 1, "left": 500, "top": 0, "right": 700,
+                                     "bottom": 600, "relativeLeft": .5, "relativeTop": 0,
+                                     "relativeRight": .7, "relativeBottom": 1}], output)
+
+            with Image.open(output) as preview:
+                self.assertNotEqual(preview.getpixel((50, 0)), (255, 255, 255))
+                self.assertEqual(preview.getpixel((49, 30)), (255, 255, 255))
+
     def test_render_preview_module_does_not_import_detector(self):
         source = (PLUGIN / "filmcrop" / "preview.py").read_text(encoding="utf-8")
         self.assertNotIn("detector", source)
+
+    def test_preview_import_does_not_load_any_recognition_module(self):
+        code = """
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, {plugin!r})
+import filmcrop.preview
+print(json.dumps({{
+    'filmcrop.detector': 'filmcrop.detector' in sys.modules,
+    'negativecutter_core.detector': 'negativecutter_core.detector' in sys.modules,
+}}, separators=(',', ':')))
+""".format(plugin=str(PLUGIN))
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout), {
+            "filmcrop.detector": False,
+            "negativecutter_core.detector": False,
+        })
 
     def test_render_preview_cli_returns_compact_json_and_does_not_invoke_detection(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -87,14 +87,22 @@ def render_preview(image_path, frames, output_path):
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
     for position, frame in enumerate(frames, start=1):
-        left = round(_finite_number(frame.get("left")) * scale)
-        top = round(_finite_number(frame.get("top")) * scale)
-        right = round(_finite_number(frame.get("right")) * scale)
-        bottom = round(_finite_number(frame.get("bottom")) * scale)
+        # Relative bounds are canonical and remain valid after thumbnail resize;
+        # retain absolute bounds only for legacy frames without relative data.
+        left = _render_bound(frame, "left", "relativeLeft", image.width, scale)
+        top = _render_bound(frame, "top", "relativeTop", image.height, scale)
+        right = _render_bound(frame, "right", "relativeRight", image.width, scale)
+        bottom = _render_bound(frame, "bottom", "relativeBottom", image.height, scale)
         draw.rectangle((left, top, right, bottom), outline=(255, 64, 32), width=max(1, round(2 * scale)))
         label = str(frame.get("index", position))
         draw.text((left + 3, top + 3), label, fill=(255, 64, 32), font=font, stroke_width=1, stroke_fill=(255, 255, 255))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output_path, format="JPEG", quality=90)
+    image.save(output_path, format="JPEG", quality=100, subsampling=0)
     return output_path
+
+
+def _render_bound(frame, absolute_name, relative_name, rendered_size, scale):
+    if relative_name in frame:
+        return round(_finite_number(frame[relative_name]) * rendered_size)
+    return round(_finite_number(frame.get(absolute_name)) * scale)
