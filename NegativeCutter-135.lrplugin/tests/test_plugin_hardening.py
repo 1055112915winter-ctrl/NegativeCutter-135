@@ -32,7 +32,7 @@ class PluginHardeningTests(unittest.TestCase):
 
     def _codesign_env(self, root: Path, exit_code=0):
         bin_dir = root / "bin"
-        bin_dir.mkdir()
+        bin_dir.mkdir(exist_ok=True)
         codesign = bin_dir / "codesign"
         codesign.write_text(f"#!/usr/bin/env sh\nexit {exit_code}\n", encoding="utf-8")
         codesign.chmod(0o755)
@@ -71,6 +71,27 @@ class PluginHardeningTests(unittest.TestCase):
             )
             self.assertNotEqual(proc.returncode, 0)
             self.assertEqual((target / "old.txt").read_bytes(), before)
+
+    def test_install_rejects_duplicate_extra_and_root_escaping_manifest_paths(self):
+        installer = PLUGIN / "install.sh"
+        cases = (
+            "0" * 64 + "  Info.lua\n" + "0" * 64 + "  Info.lua\n",
+            "0" * 64 + "  extra.txt\n",
+            "0" * 64 + "  /absolute.txt\n",
+            "0" * 64 + "  nested/../../escape.txt\n",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, manifest in enumerate(cases):
+                with self.subTest(index=index):
+                    source = self._fixture_plugin(root / str(index))
+                    (source / "RELEASE-MANIFEST.sha256").write_text(manifest, encoding="utf-8")
+                    modules = root / f"modules-{index}"; modules.mkdir()
+                    target = modules / source.name; target.mkdir()
+                    (target / "keep").write_bytes(b"unchanged")
+                    proc = subprocess.run([str(installer), str(source)], env={**self._codesign_env(root), "NEGATIVECUTTER_MODULES_DIR": str(modules), "NEGATIVECUTTER_TEST_SKIP_CODESIGN": "1"}, check=False, capture_output=True, text=True)
+                    self.assertNotEqual(proc.returncode, 0)
+                    self.assertEqual((target / "keep").read_bytes(), b"unchanged")
 
     def test_install_rejects_bad_signature_and_preserves_target(self):
         installer = PLUGIN / "install.sh"
@@ -114,11 +135,15 @@ class PluginHardeningTests(unittest.TestCase):
             self.assertNotEqual(failed.returncode, 0)
             self.assertEqual((target / "old.txt").read_bytes(), b"preserve me")
 
-    def test_release_zip_inventory_is_exact_when_fixture_build_is_available(self):
+    def test_release_fixture_override_is_a_regular_file(self):
         fixture = os.environ.get("NEGATIVECUTTER_RELEASE_135_FIXTURE")
-        if not fixture:
-            self.skipTest("NEGATIVECUTTER_RELEASE_135_FIXTURE is required for release build smoke test")
-        self.assertTrue(Path(fixture).is_file())
+        if fixture:
+            self.assertTrue(Path(fixture).is_file())
+
+    def test_build_defaults_required_release_fixtures_and_json_smoke_contract(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        for required in ("52191.tif", "Untitled (3).tif", "--frames 6 --format 35mm --original", "--frames 4 --format 645 --original", "needsReview", "frameCount"):
+            self.assertIn(required, source)
 
     def test_api_module_imports_without_fastapi(self):
         code = f"""

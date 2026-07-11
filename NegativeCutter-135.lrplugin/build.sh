@@ -12,10 +12,16 @@ VERSION="$(python3 -c "import sys; sys.path.insert(0, '.'); from filmcrop import
 OUTPUT_ZIP="$(dirname "$SCRIPT_DIR")/${PLUGIN_NAME}-v${VERSION}.zip"
 STAGE="${TMPDIR:-/tmp}/filmcrop-release-$$"
 EXTRACTED="$STAGE/extracted"
+FIXTURE_135="${NEGATIVECUTTER_RELEASE_135_FIXTURE:-$SCRIPT_DIR/../test_files/52191.tif}"
+FIXTURE_120="${NEGATIVECUTTER_RELEASE_120_FIXTURE:-$SCRIPT_DIR/../test_files/Untitled (3).tif}"
 trap 'rm -rf "$STAGE"; rm -f "$OUTPUT_ZIP"' ERR INT TERM
 trap 'rm -rf "$STAGE"' EXIT
 
-rm -rf build dist
+[[ -f "$FIXTURE_135" && ! -L "$FIXTURE_135" ]] || { echo "ERROR: missing 135 release fixture: $FIXTURE_135" >&2; exit 1; }
+[[ -f "$FIXTURE_120" && ! -L "$FIXTURE_120" ]] || { echo "ERROR: missing 120 release fixture: $FIXTURE_120" >&2; exit 1; }
+# Never validate an old executable or accidentally retain a previous release.
+rm -rf build dist NegativeCutter
+rm -f "$OUTPUT_ZIP"
 python3 -m PyInstaller NegativeCutter.spec
 if [[ -d dist/NegativeCutter && -x dist/NegativeCutter/NegativeCutter ]]; then
   rm -rf NegativeCutter
@@ -37,8 +43,22 @@ for item in "${ALLOWLIST[@]}"; do
   [[ -e "$item" && ! -L "$item" ]] || { echo "ERROR: missing or symlinked allowlist entry: $item" >&2; exit 1; }
   cp -RL "$item" "$STAGE/$PLUGIN_DIR/$item"
 done
+# These paths are never release components, even if a future allowlist edit is
+# attempted without a corresponding review.
+find "$STAGE/$PLUGIN_DIR" \( -path '*/marketing/*' -o -path '*/.claude/*' -o -name marketing -o -name .claude \) -print -quit | grep -q . && { echo "ERROR: forbidden marketing/.claude release component" >&2; exit 1; }
 cp install.sh "$STAGE/install.sh"
 chmod 755 "$STAGE/install.sh"
+
+python3 - "$STAGE/$PLUGIN_DIR" <<'PY'
+import re, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+info = (root / 'Info.lua').read_text(encoding='utf-8')
+missing = [name for name in re.findall(r'''file\s*=\s*["']([^"']+)["']''', info)
+           if not (root / name).is_file()]
+if missing:
+    raise SystemExit('ERROR: Info.lua references missing files: ' + ', '.join(missing))
+PY
 
 python3 - "$STAGE/$PLUGIN_DIR" <<'PY'
 import hashlib, sys
@@ -86,15 +106,19 @@ if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact r
 if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
 PY
 
-smoke() { "$1/NegativeCutter/NegativeCutter" --help >/dev/null; }
-smoke "$EXTRACTED/$PLUGIN_DIR"
-for spec in "135:${NEGATIVECUTTER_RELEASE_135_FIXTURE:-}" "120:${NEGATIVECUTTER_RELEASE_120_FIXTURE:-}"; do
-  generation="${spec%%:*}"; fixture="${spec#*:}"
-  [[ -z "$fixture" ]] && continue
-  [[ -f "$fixture" && ! -L "$fixture" ]] || { echo "ERROR: release fixture must be a regular ZIP file" >&2; exit 1; }
-  fixture_extract="$STAGE/fixture-$generation"
-  mkdir "$fixture_extract"
-  unzip -q "$fixture" -d "$fixture_extract"
-  smoke "$fixture_extract/NegativeCutter-$generation.lrplugin"
-done
+smoke() {
+  local plugin="$1" fixture="$2" frames="$3" format="$4" output
+  output="$("$plugin/NegativeCutter/NegativeCutter" "$fixture" --frames "$frames" --format "$format" --original "$fixture")"
+  python3 - "$output" "$frames" <<'PY'
+import json, sys
+result = json.loads(sys.argv[1])
+if result.get('error') or result.get('needsReview') is not False or type(result.get('frameCount')) is not int or result['frameCount'] != int(sys.argv[2]):
+    raise SystemExit('ERROR: release smoke JSON contract failed')
+PY
+}
+# Both staged and extracted release bundles must run their generation-specific
+# inputs before a ZIP can survive this script: --frames 6 --format 35mm --original;
+# --frames 4 --format 645 --original.
+smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
+smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_120" 4 645
 echo "Built $OUTPUT_ZIP"

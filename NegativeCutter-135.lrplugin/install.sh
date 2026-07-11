@@ -37,7 +37,7 @@ rollback() {
   if [[ -e "$BACKUP" && ! -e "$TARGET" ]]; then mv "$BACKUP" "$TARGET"; fi
   rm -rf "$STAGED"
 }
-trap 'rollback' ERR INT TERM
+trap 'rollback; echo "Install failed; staged=$STAGED target=$TARGET" >&2' ERR INT TERM
 verify_manifest "$SOURCE"
 [[ "${NEGATIVECUTTER_TEST_SKIP_CODESIGN:-0}" == 1 ]] || codesign --verify --deep --strict "$SOURCE/NegativeCutter"
 cp -RL "$SOURCE" "$STAGED"
@@ -50,3 +50,5 @@ mv "$STAGED" "$TARGET"
 rm -rf "$BACKUP"
 trap - ERR INT TERM
 echo "Installed $NAME into $MODULES_DIR"
+echo "Installed plugin path: $TARGET"
+echo "Restart Lightroom to load the updated plugin."
