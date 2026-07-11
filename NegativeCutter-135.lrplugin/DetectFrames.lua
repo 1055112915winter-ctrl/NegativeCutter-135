@@ -1,332 +1,141 @@
---[[
-  NegativeCutter 胶片帧检测 - Python分析版本
-
-  工作流程:
-  1. 获取缩略图
-  2. 调用Python脚本分析帧边界
-  3. 方向对齐
-  4. 为每帧创建虚拟副本并应用裁剪
-]]--
-
+-- Detect Frames recognition entry with optional live preview.
 local LrApplication = import 'LrApplication'
 local LrDialogs = import 'LrDialogs'
 local LrLogger = import 'LrLogger'
 local LrPathUtils = import 'LrPathUtils'
-local LrTasks = import 'LrTasks'
 local LrPrefs = import 'LrPrefs'
+local LrTasks = import 'LrTasks'
 local LrView = import 'LrView'
 
 local pluginPath = _PLUGIN.path
-
 local ProcessAgent = dofile(LrPathUtils.child(pluginPath, "ProcessAgent.lua"))
 local CropCleaner = dofile(LrPathUtils.child(pluginPath, "CropCleaner.lua"))
-
-local logger = LrLogger('NegativeCutter')
-logger:enable("logfile")
-
+local PreviewAgent = require 'PreviewAgent'
+local PreviewRuntime = require 'PreviewRuntime'
+local logger = LrLogger('NegativeCutter.DetectFrames'); logger:enable("logfile")
 local prefs = LrPrefs.prefsForPlugin()
 
-if not prefs.expectedFrames then
-  prefs.expectedFrames = 6
+local FORMAT_OPTIONS = {
+  { value = "", display = "自动检测" }, { value = "35mm", display = "135 (35mm)" },
+  { value = "645", display = "120 6×4.5" }, { value = "6x6", display = "120 6×6" },
+  { value = "6x7", display = "120 6×7" }, { value = "6x8", display = "120 6×8" },
+  { value = "6x9", display = "120 6×9" }, { value = "4x5", display = "大画幅 4×5" },
+}
+local PREVIEW_MODES = {
+  { value = "per_photo", display = "逐张预览" },
+  { value = "batch_uniform", display = "整批统一" },
+  { value = "none", display = "不预览" },
+}
+
+local function optionIndex(options, value)
+  for index, option in ipairs(options) do if option.value == value then return index end end
+  return 1
 end
 
---[[
-  处理单张照片（自动创建虚拟副本）
-]]--
-local function processPhotoWithPreview(catalog, photo, i, total, errorMessages, expectedFrames)
-  errorMessages = errorMessages or {}
-  expectedFrames = expectedFrames or (prefs.expectedFrames or 6)
+local function menuItems(options)
+  local items = {}; for index, option in ipairs(options) do items[index] = { title = option.display, value = index } end
+  return items
+end
 
-  local fileName = photo:getFormattedMetadata('fileName')
-  logger:trace(string.format("处理文件 %d/%d: %s", i, total, fileName))
+local function chooseSettings(photoCount)
+  local f, bind = LrView.osFactory(), LrView.bind
+  local filmTypes = CropCleaner.availableTypes()
+  local dialogData = {
+    expectedFrames = prefs.expectedFrames or 6,
+    formatIndex = optionIndex(FORMAT_OPTIONS, prefs.filmFormat or ""),
+    filmTypeIndex = optionIndex(filmTypes, prefs.filmType or "negative"),
+    previewModeIndex = optionIndex(PREVIEW_MODES, prefs.previewModeDetect or "per_photo"),
+  }
+  local result = LrDialogs.presentModalDialog {
+    title = "NegativeCutter - 开始检测", actionVerb = "开始检测", cancelVerb = "取消",
+    contents = f:column {
+      bind_to_object = dialogData, spacing = f:control_spacing(),
+      f:static_text { title = string.format("将处理 %d 个胶片扫描文件", photoCount) },
+      f:row { f:static_text { title = "预期帧数:", width = 90 },
+        f:edit_field { value = bind "expectedFrames", width_in_chars = 6, precision = 0 } },
+      f:row { f:static_text { title = "胶片格式:", width = 90 },
+        f:popup_menu { value = bind "formatIndex", items = menuItems(FORMAT_OPTIONS), width_in_chars = 16 } },
+      f:row { f:static_text { title = "胶片类型:", width = 90 },
+        f:popup_menu { value = bind "filmTypeIndex", items = menuItems(filmTypes), width_in_chars = 16 } },
+      f:row { f:static_text { title = "预览方式:", width = 90 },
+        f:popup_menu { value = bind "previewModeIndex", items = menuItems(PREVIEW_MODES), width_in_chars = 16 } },
+    },
+  }
+  if result ~= "ok" then return nil end
+  local settings = {
+    expectedFrames = tonumber(dialogData.expectedFrames) or 6,
+    formatHint = FORMAT_OPTIONS[dialogData.formatIndex].value,
+    filmType = filmTypes[dialogData.filmTypeIndex].value,
+    previewMode = PREVIEW_MODES[dialogData.previewModeIndex].value,
+  }
+  if settings.formatHint == "" then settings.formatHint = nil end
+  prefs.filmFormat, prefs.filmType, prefs.previewModeDetect = settings.formatHint or "", settings.filmType, settings.previewMode
+  return settings
+end
 
-  -- 步骤1: 获取缩略图（先尝试 2048，大 DNG 在 8192 下容易失败）
-  local thumbPath, thumbErr = ProcessAgent.extractThumbnail(photo, 2048)
-  if not thumbPath then
-    local msg = fileName .. ": 缩略图获取失败 - " .. (thumbErr or "未知")
-    logger:error(msg)
-    table.insert(errorMessages, msg)
-    return 0
-  end
+local function previewDetection(detection, runtime, title)
+  return PreviewAgent.review(nil, {
+    frames = detection.frames, thumbnailPath = detection.thumbnailPath,
+    sourceWidth = detection.sourceWidth, sourceHeight = detection.sourceHeight, title = title,
+  }, runtime)
+end
 
-  -- 步骤2: Python 分析
-  local originalPath = photo:getRawMetadata("path")
-  local formatHint = prefs.filmFormat or nil
-  local photoDimensions = photo:getRawMetadata("dimensions")
-  local lrWidth = photoDimensions and photoDimensions.width or nil
-  local lrHeight = photoDimensions and photoDimensions.height or nil
-  local result, analyzeError = ProcessAgent.analyzeWithPython(
-    thumbPath, expectedFrames, originalPath, formatHint, lrWidth, lrHeight)
-
-  if not result or not result.frames or #result.frames == 0 then
-    local msg = fileName .. ": 分析失败 - " .. (analyzeError or "未检测到帧")
-    logger:error(msg)
-    table.insert(errorMessages, msg)
-    return 0
-  end
-
-  -- 补充 source 尺寸到每帧（供预览对话框使用）
-  for _, frame in ipairs(result.frames) do
-    frame.sourceHeight = result.sourceHeight
-    frame.sourceWidth = result.sourceWidth
-  end
-
-  -- 使用 CropCleaner 按胶片类型清理边界
-  local filmType = prefs.filmType or "negative"
-  CropCleaner.cleanFrames(result.frames, result.sourceWidth, result.sourceHeight, filmType)
-
-  -- 步骤3: 方向对齐
-  result = ProcessAgent.directionAlign(result, photo)
-
-  -- 步骤4: 跳过预览，直接使用检测结果
-  local frames = result.frames
-
-  -- 步骤5: 创建虚拟副本并应用裁剪
-  local baseName = fileName:gsub("%..+$", "")
-  local createdCount = 0
-
-  for frameIdx, frame in ipairs(frames) do
-    catalog:setSelectedPhotos(photo, {photo})
-    LrTasks.sleep(0.1)
-
-    local virtualCopy = nil
-    catalog:withWriteAccessDo(string.format("创建第%d帧虚拟副本", frameIdx), function(context)
-      local copies = catalog:createVirtualCopies()
-      if copies and #copies > 0 then
-        virtualCopy = copies[1]
-      end
-    end)
-
-    if not virtualCopy then
-      table.insert(errorMessages, string.format("%s: 第%d帧虚拟副本创建失败", fileName, frameIdx))
+local function runRecognition(catalog, photos, settings, runtime)
+  local stats = { total = #photos, terminal = 0, created = 0, errors = {}, canceled = false }
+  local sharedOffsets
+  for index, photo in ipairs(photos) do
+    local detection, detectError = ProcessAgent.detectPhoto(photo, settings)
+    if not detection then
+      stats.errors[#stats.errors + 1] = tostring(detectError); stats.terminal = stats.terminal + 1
     else
-      catalog:setSelectedPhotos(virtualCopy, {virtualCopy})
-      LrTasks.sleep(0.2)
-
-      -- 重置持久化裁剪
-      catalog:withWriteAccessDo(string.format("重置第%d帧裁剪", frameIdx), function(context)
-        ApplierAgent = dofile(LrPathUtils.child(pluginPath, "ApplierAgent.lua"))
-        ApplierAgent.resetCrop(virtualCopy)
-      end)
-      LrTasks.sleep(0.8)
-
-      local sourceW = result.sourceWidth
-      local sourceH = result.sourceHeight
-      if sourceW and sourceW > 0 and sourceH and sourceH > 0 then
-        local applyErr = nil
-        catalog:withWriteAccessDo(string.format("应用第%d帧裁剪", frameIdx), function(context)
-          local success, err = ApplierAgent.applyCrop(virtualCopy, {
-            top = frame.relativeTop,
-            bottom = frame.relativeBottom,
-            left = frame.relativeLeft or 0,
-            right = frame.relativeRight or 1,
-            sourceWidth = sourceW,
-            sourceHeight = sourceH,
-            cropAngle = result.cropAngle or 0
-          })
-          if not success then applyErr = err or "未知错误" end
-        end)
-
-        if applyErr then
-          table.insert(errorMessages, string.format("%s: 第%d帧裁剪应用失败 - %s", fileName, frameIdx, applyErr))
+      local selected = detection
+      if settings.previewMode == "per_photo" then
+        local preview = previewDetection(detection, runtime, string.format("逐张预览 %d/%d · %s", index, #photos, detection.fileName))
+        if preview.status == "canceled" then stats.canceled = true; break end
+        if preview.status == "error" then
+          stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. preview.error; stats.terminal = stats.terminal + 1
+          selected = nil
         else
-          createdCount = createdCount + 1
+          selected.frames = preview.frames
+        end
+      elseif settings.previewMode == "batch_uniform" then
+        if not sharedOffsets then
+          local preview = previewDetection(detection, runtime, "整批统一预览 · " .. detection.fileName)
+          if preview.status == "canceled" then stats.canceled = true; break end
+          if preview.status == "error" then
+            stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. preview.error; stats.canceled = true; break
+          end
+          sharedOffsets = { topPx = preview.offsets.topPx, bottomPx = preview.offsets.bottomPx,
+            leftPx = preview.offsets.leftPx, rightPx = preview.offsets.rightPx }
+          selected.frames = preview.frames
+        else
+          local adjusted, adjustError = ProcessAgent.adjustDetection(detection, sharedOffsets)
+          if not adjusted then
+            stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. tostring(adjustError); stats.terminal = stats.terminal + 1
+            selected = nil
+          else selected = adjusted end
         end
       end
-
-      local copyName = string.format("%s_帧%02d", baseName, frameIdx)
-      pcall(function()
-        virtualCopy:setRawMetadata('copyName', copyName)
-      end)
-
-      LrTasks.sleep(0.2)
+      if selected then
+        local summary = ProcessAgent.createVirtualCopies(catalog, selected, {})
+        stats.created = stats.created + summary.createdCount
+        for _, message in ipairs(summary.errors) do stats.errors[#stats.errors + 1] = message end
+        stats.terminal = stats.terminal + 1
+      end
     end
   end
-
-  return createdCount
+  return stats
 end
 
---[[
-  主程序
-]]--
 LrTasks.startAsyncTask(function()
-  logger:trace("=" .. string.rep("=", 60))
-  logger:trace("NegativeCutter Python版检测开始 (v2.4.3)")
-  logger:trace("=" .. string.rep("=", 60))
-
   local catalog = LrApplication.activeCatalog()
-  local selectedPhotos = catalog:getTargetPhotos()
-
-  if not selectedPhotos or #selectedPhotos == 0 then
-    LrDialogs.message("NegativeCutter", "请先选择要处理的胶片扫描文件", "info")
-    return
-  end
-
-  logger:trace(string.format("选中 %d 张照片", #selectedPhotos))
-
-  -- 确认对话框（带预期帧数编辑）
-  local f = LrView.osFactory()
-  local bind = LrView.bind
-  -- Format options: value = code passed to Python, display = user-visible label
-  local _FORMAT_OPTIONS = {
-    { value = "",    display = "自动检测" },
-    { value = "35mm", display = "135 (35mm)" },
-    { value = "645",  display = "120 6×4.5" },
-    { value = "6x6",  display = "120 6×6" },
-    { value = "6x7",  display = "120 6×7" },
-    { value = "6x8",  display = "120 6×8" },
-    { value = "6x9",  display = "120 6×9" },
-    { value = "4x5",  display = "大画幅 4×5" },
-  }
-
-  -- Build popup menu items from _FORMAT_OPTIONS
-  local formatMenuItems = {}
-  for i, opt in ipairs(_FORMAT_OPTIONS) do
-    table.insert(formatMenuItems, { title = opt.display, value = i })
-  end
-
-  -- Film type options
-  local filmTypeOptions = CropCleaner.availableTypes()
-  local filmTypeMenuItems = {}
-  for i, opt in ipairs(filmTypeOptions) do
-    table.insert(filmTypeMenuItems, { title = opt.display, value = i })
-  end
-
-  -- Find current selection index
-  local currentFormat = prefs.filmFormat or ""
-  local formatIndex = 1
-  for i, opt in ipairs(_FORMAT_OPTIONS) do
-    if opt.value == currentFormat then
-      formatIndex = i
-      break
-    end
-  end
-
-  local currentFilmType = prefs.filmType or "negative"
-  local filmTypeIndex = 1
-  for i, opt in ipairs(filmTypeOptions) do
-    if opt.value == currentFilmType then
-      filmTypeIndex = i
-      break
-    end
-  end
-
-  local dialogData = {
-    expectedFrames = prefs.expectedFrames or 0,
-    formatIndex    = formatIndex,
-    filmTypeIndex  = filmTypeIndex,
-  }
-
-  local messageText = string.format("将对 %d 个文件进行胶片帧检测并创建虚拟副本:", #selectedPhotos)
-  for i, photo in ipairs(selectedPhotos) do
-    if i <= 3 then
-      messageText = messageText .. "\n  • " .. photo:getFormattedMetadata('fileName')
-    elseif i == 4 then
-      messageText = messageText .. "\n  • ..."
-      break
-    end
-  end
-
-  local contents = f:column {
-    spacing = f:control_spacing(),
-    bind_to_object = dialogData,
-    f:static_text {
-      title = messageText,
-      height_in_lines = 6,
-    },
-    f:separator {},
-    f:row {
-      spacing = f:label_spacing(),
-      f:static_text { title = "预期帧数:", width = 80 },
-      f:edit_field {
-        value = bind "expectedFrames",
-        width_in_chars = 5,
-        precision = 0,
-      },
-      f:static_text { title = "(填 0 自动检测，或手动指定实际帧数)" },
-    },
-    f:row {
-      spacing = f:label_spacing(),
-      f:static_text { title = "胶片格式:", width = 80 },
-      f:popup_menu {
-        items = formatMenuItems,
-        value = bind "formatIndex",
-        width_in_chars = 14,
-      },
-      f:static_text { title = "(选自动时由引擎推断宽高比)" },
-    },
-    f:row {
-      spacing = f:label_spacing(),
-      f:static_text { title = "胶片类型:", width = 80 },
-      f:popup_menu {
-        items = filmTypeMenuItems,
-        value = bind "filmTypeIndex",
-        width_in_chars = 18,
-      },
-      f:static_text { title = "(决定边界清理强度)" },
-    },
-    f:static_text {
-      title = "每帧将创建为一个独立的虚拟副本。",
-      height_in_lines = 2,
-    },
-  }
-
-  local result = LrDialogs.presentModalDialog {
-    title = "NegativeCutter - 开始检测",
-    contents = contents,
-    actionVerb = "开始检测",
-    cancelVerb = "取消",
-  }
-  if result ~= "ok" then
-    return
-  end
-
-  local expectedFrames = tonumber(dialogData.expectedFrames) or (prefs.expectedFrames or 6)
-  local chosenFormat = _FORMAT_OPTIONS[dialogData.formatIndex].value
-  local chosenFilmType = filmTypeOptions[dialogData.filmTypeIndex].value
-  prefs.filmFormat = chosenFormat
-  prefs.filmType = chosenFilmType
-  logger:trace("用户指定的胶片格式: " .. tostring(chosenFormat))
-  logger:trace("用户指定的胶片类型: " .. tostring(chosenFilmType))
-  logger:trace("用户指定的预期帧数: " .. tostring(expectedFrames))
-
-  local processedCount = 0
-  local totalVirtualCopies = 0
-  local errorMessages = {}
-
-  for i, photo in ipairs(selectedPhotos) do
-    local createdCount = processPhotoWithPreview(catalog, photo, i, #selectedPhotos, errorMessages, expectedFrames)
-    totalVirtualCopies = totalVirtualCopies + createdCount
-    processedCount = processedCount + 1
-  end
-
-  logger:trace(string.format("处理完成: %d 个文件, 共创建 %d 个虚拟副本", processedCount, totalVirtualCopies))
-
-  if #errorMessages > 0 then
-    local errorMsg = table.concat(errorMessages, "\n")
-    if #errorMsg > 500 then
-      errorMsg = string.sub(errorMsg, 1, 500) .. "\n... (更多错误)"
-    end
-    local failResult = LrDialogs.confirm(
-      "⚠️  检测完成（部分失败）",
-      string.format("成功处理 %d 个文件 · 创建 %d 个虚拟副本\n失败 %d 个\n\n错误详情:\n%s",
-        processedCount, totalVirtualCopies, #errorMessages, errorMsg),
-      "🐛 反馈问题",
-      "关闭"
-    )
-    if failResult == "ok" then
-      dofile(LrPathUtils.child(pluginPath, "Feedback.lua"))
-    end
-  else
-    local donateResult = LrDialogs.confirm(
-      "✅ 检测完成",
-      string.format("成功处理 %d 个文件\n共创建 %d 个虚拟副本\n\n各个帧的虚拟副本已就绪，\n请在图库模块中查看。",
-        processedCount, totalVirtualCopies),
-      "☕ 请作者喝咖啡",
-      "关闭"
-    )
-    if donateResult == "ok" then
-      ProcessAgent.openSponsorImage()
-    end
-  end
+  local photos = catalog:getTargetPhotos()
+  if not photos or #photos == 0 then LrDialogs.message("NegativeCutter", "请先选择要处理的胶片扫描文件", "info"); return end
+  local settings = chooseSettings(#photos); if not settings then return end
+  local runtime = PreviewRuntime.current()
+  if not runtime then LrDialogs.message("NegativeCutter", "预览运行时尚未初始化，请重启 Lightroom 后重试", "critical"); return end
+  local stats = runRecognition(catalog, photos, settings, runtime)
+  local title = stats.canceled and "NegativeCutter - 已取消" or (#stats.errors > 0 and "NegativeCutter - 部分完成" or "NegativeCutter - 完成")
+  LrDialogs.message(title, string.format("已完成 %d/%d 个文件，创建 %d 个虚拟副本，错误 %d 个",
+    stats.terminal, stats.total, stats.created, #stats.errors), #stats.errors > 0 and "warning" or "info")
 end)

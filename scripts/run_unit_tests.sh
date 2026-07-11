@@ -10,6 +10,7 @@ for pattern in \
   test_auto_frame_detection.py \
   test_plugin_hardening.py \
   test_preview_dialog_contract.py \
+  test_recognition_ui_contract.py \
   test_medium_format_detection.py \
   test_medium_format_real_fixtures.py
 do
