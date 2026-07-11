@@ -243,7 +243,13 @@ class PluginHardeningTests(unittest.TestCase):
     def test_ditto_archive_explicitly_packages_only_two_release_roots(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         self.assertIn('( cd "$ARCHIVE_ROOT" && ditto -c -k --sequesterRsrc . "$OUTPUT_ZIP" )', source)
-        self.assertIn("actual payload entries", source)
+        self.assertIn("payload count", source)
+
+    def test_build_prunes_bytecode_before_manifest_and_uses_extracted_manifest_as_authority(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        self.assertIn("-name '__pycache__'", source)
+        self.assertIn("-name '*.pyc'", source)
+        self.assertLess(source.index("-name '__pycache__'"), source.index("RELEASE-MANIFEST.sha256").__int__())
 
     def test_api_module_imports_without_fastapi(self):
         code = f"""

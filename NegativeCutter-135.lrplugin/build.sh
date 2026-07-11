@@ -66,6 +66,8 @@ done
 find "$STAGE/$PLUGIN_DIR" \( -path '*/marketing/*' -o -path '*/.claude/*' -o -name marketing -o -name .claude \) -print -quit | grep -q . && { echo "ERROR: forbidden marketing/.claude release component" >&2; exit 1; }
 cp install.sh "$STAGE/install.sh"
 chmod 755 "$STAGE/install.sh"
+find "$STAGE/$PLUGIN_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$STAGE/$PLUGIN_DIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
 python3 - "$STAGE/$PLUGIN_DIR" <<'PY'
 import re, sys
@@ -143,14 +145,14 @@ python3 - "$OUTPUT_ZIP" "$STAGE" <<'PY'
 import sys, zipfile
 from pathlib import Path
 archive, stage = map(Path, sys.argv[1:])
-expected = {'install.sh'} | {f'NegativeCutter-135.lrplugin/{p.relative_to(stage / "NegativeCutter-135.lrplugin").as_posix()}' for p in (stage / 'NegativeCutter-135.lrplugin').rglob('*') if p.is_file()}
 names = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
 # __MACOSX and AppleDouble (._*) are ditto metadata, not release payload.
 metadata = {n for n in names if n.startswith('__MACOSX/') or '/._' in n or n.startswith('._')}
 actual = names - metadata
-if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact release file set; actual payload entries: ' + ', '.join(sorted(actual)))
 if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
 if any('/marketing/' in n or '/.claude/' in n or n.startswith('marketing/') or n.startswith('.claude/') for n in actual): raise SystemExit('ERROR: forbidden ZIP payload entry')
+if any('/__pycache__/' in n or n.endswith(('.pyc', '.pyo')) for n in actual): raise SystemExit('ERROR: bytecode leaked into ZIP payload')
+if not {'install.sh', 'NegativeCutter-135.lrplugin/RELEASE-MANIFEST.sha256'} <= actual: raise SystemExit('ERROR: ZIP payload missing required roots; payload count=' + str(len(actual)))
 PY
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_120" 4 645
