@@ -165,8 +165,20 @@ function PreviewRuntime.create(sdk, processAgent, options)
     local partial = path .. ".partial"
     local ok, writeError = writeFile(partial, content)
     if not ok then return false, writeError or "write failed" end
+    -- LrFileUtils.move deliberately refuses to overwrite an existing file.
+    -- Replace the previous active pointer only after the new partial is ready.
+    if fileUtils.exists and fileUtils.exists(path) then
+      local deleted = fileUtils.delete and fileUtils.delete(path)
+      if deleted == false or deleted == nil then
+        if fileUtils.delete then fileUtils.delete(partial) end
+        return false, "replace target failed"
+      end
+    end
     local moved = fileUtils.move and fileUtils.move(partial, path)
-    if moved == false or moved == nil then return false, "rename failed" end
+    if moved == false or moved == nil then
+      if fileUtils.delete then fileUtils.delete(partial) end
+      return false, "rename failed"
+    end
     return true
   end
   function filesystem:publishSlot(source, destination)

@@ -27,7 +27,10 @@ local sdk = {
     createAllDirectories = function(path) directories[path] = true; return true end,
     writeFile = function(path, content) files[path] = content; return true end,
     readFile = function(path) return files[path] end,
-    move = function(from, to) files[to] = files[from]; files[from] = nil; return true end,
+    move = function(from, to)
+      if files[to] ~= nil then return false end
+      files[to] = files[from]; files[from] = nil; return true
+    end,
     delete = function(path) files[path] = nil; directories[path] = nil; return true end,
     exists = function(path) return files[path] ~= nil or directories[path] == true end,
     filesInDirectory = function(root)
@@ -91,7 +94,10 @@ assert(runtime.filesystem:mkdir("/outside") == false, "mkdir must not escape pre
 assert(runtime.filesystem:writeAtomic(dir .. "/../../outside", "bad") == false, "write must reject nested traversal")
 assert(runtime.filesystem:publishSlot(dir .. "/../../source", dir .. "/active.json") == false, "publish source must reject nested traversal")
 assert(runtime.filesystem:publishSlot(dir .. "/one", dir .. "/../../active.json") == false, "publish destination must reject nested traversal")
+files[dir .. "/one"] = "first preview"
 assert(runtime.filesystem:publishSlot(dir .. "/one", dir .. "/active.json"), "atomic publish failed")
+files[dir .. "/two"] = "second preview"
+assert(runtime.filesystem:publishActive({ path = dir .. "/two", generation = 2 }, dir .. "/active.json"), "active pointer replacement failed")
 assert(runtime.filesystem:readMarker(dir) == Runtime.ownerMarker(session, dialog), "marker read failed")
 
 local quotedRoot = '/preview-"root\\folder'
