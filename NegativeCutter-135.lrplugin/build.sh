@@ -1,122 +1,159 @@
 #!/usr/bin/env bash
-# build.sh — 一键构建 NegativeCutter-135 分发包
-#
-# 依赖：
-#   - Python 3
-#   - pip install pyinstaller
-#   - 已安装 numpy、Pillow、rawpy（可选）等 filmcrop 依赖
-#
-# 用法：
-#   cd NegativeCutter-135.lrplugin
-#   ./build.sh
-#
-# 输出：
-#   ../NegativeCutter-135-v{VERSION}.zip
-
+# Build a self-contained Lightroom release.  The checksum and code signature
+# checks below detect accidental damage; they do not establish publisher identity.
 set -euo pipefail
+umask 077
 
-# 解析版本号
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-
-VERSION=$(python3 - <<'PY'
-import sys
-sys.path.insert(0, '.')
-from filmcrop import __version__
-print(__version__)
-PY
-)
-
+PLUGIN_DIR="NegativeCutter-135.lrplugin"
 PLUGIN_NAME="NegativeCutter-135"
-OUTPUT_DIR="$(dirname "$SCRIPT_DIR")"
-OUTPUT_ZIP="${OUTPUT_DIR}/${PLUGIN_NAME}-v${VERSION}.zip"
+VERSION="$(python3 -c "import sys; sys.path.insert(0, '.'); from filmcrop import __version__; print(__version__)")"
+OUTPUT_ZIP="$(dirname "$SCRIPT_DIR")/${PLUGIN_NAME}-v${VERSION}.zip"
+STAGE="${TMPDIR:-/tmp}/filmcrop-release-$$"
+EXTRACTED="$STAGE/extracted"
+FIXTURE_135="${NEGATIVECUTTER_RELEASE_135_FIXTURE:-$SCRIPT_DIR/../test_files/52191.tif}"
+FIXTURE_120="${NEGATIVECUTTER_RELEASE_120_FIXTURE:-$SCRIPT_DIR/../test_files/Untitled (3).tif}"
+cleanup_failure() { rm -rf "$STAGE"; rm -f "$OUTPUT_ZIP"; }
+trap cleanup_failure ERR
+trap 'cleanup_failure; exit 1' INT TERM
+trap 'rm -rf "$STAGE"' EXIT
 
-echo "==> 构建 NegativeCutter-135 v${VERSION}"
-echo "==> 插件目录: $SCRIPT_DIR"
-echo "==> 输出包:   $OUTPUT_ZIP"
-
-# 1. 清理旧构建产物
-echo "==> 清理旧构建产物..."
-rm -rf build dist
+[[ -f "$FIXTURE_135" && ! -L "$FIXTURE_135" ]] || { echo "ERROR: missing 135 release fixture: $FIXTURE_135" >&2; exit 1; }
+[[ -f "$FIXTURE_120" && ! -L "$FIXTURE_120" ]] || { echo "ERROR: missing 120 release fixture: $FIXTURE_120" >&2; exit 1; }
+# Prior interrupted builds leave only reproducible output; discard it before
+# classifying the source tree so it can never mask an unknown source entry.
+rm -rf build dist NegativeCutter
+# Classify every source-tree component before touching build output.  Release
+# inclusion is intentionally narrower than this source inventory.
+SOURCE_ALLOWLIST=(.gitignore ApplierAgent.lua BatchProcess.lua CropCleaner.lua DetectFrames.lua Feedback.lua INSTALL.md ImportAgent.lua Info.lua Init.lua LICENSE NegativeCutter NegativeCutter.spec PluginInfoProvider.lua ProcessAgent.lua README.md Shutdown.lua Sponsor.lua THIRD-PARTY-LICENSES.md ThumbnailAgent.lua build.sh detect_thumb.py filmcrop install.sh json.lua tests)
+for source_item in "$SCRIPT_DIR"/* "$SCRIPT_DIR"/.[!.]*; do
+  source_name="$(basename "$source_item")"
+  [[ "$source_name" == . || "$source_name" == .. ]] && continue
+  case " ${SOURCE_ALLOWLIST[*]} " in *" $source_name "*) ;; *) echo "ERROR: unclassified source entry: $source_name" >&2; exit 1;; esac
+  [[ "$source_name" != marketing && "$source_name" != .claude ]] || { echo "ERROR: forbidden source component: $source_name" >&2; exit 1; }
+done
+# Never retain a previous release.
 rm -f "$OUTPUT_ZIP"
-
-# 2. 用 PyInstaller 构建 onedir 可执行文件
-echo "==> 运行 PyInstaller..."
 python3 -m PyInstaller NegativeCutter.spec
-
-# 3. 检查 PyInstaller 输出并复制到插件根目录
-# 优先使用 onedir 模式（dist/NegativeCutter/ 目录），避免 onefile 在 Lightroom
-# 沙箱子进程中自解压失败（退出码 32512 / semaphore 初始化错误）。
-EXE_DIR=""
-if [[ -d "dist/NegativeCutter" && -x "dist/NegativeCutter/NegativeCutter" ]]; then
-  EXE_DIR="dist/NegativeCutter"
-elif [[ -x "dist/NegativeCutter" ]]; then
-  # 兼容旧的 onefile 输出
-  EXE_DIR="dist/NegativeCutter"
-fi
-
-if [[ -z "$EXE_DIR" ]]; then
-  echo "ERROR: 可执行文件未生成于 dist/NegativeCutter" >&2
+codesign --force --deep --sign - dist/NegativeCutter
+if [[ -d dist/NegativeCutter && -x dist/NegativeCutter/NegativeCutter ]]; then
+  rm -rf NegativeCutter
+  ditto dist/NegativeCutter NegativeCutter
+elif [[ ! -x dist/NegativeCutter ]]; then
+  echo "ERROR: executable missing from dist/NegativeCutter" >&2
   exit 1
 fi
 
-echo "==> 可执行文件生成成功: $EXE_DIR"
-echo "==> 复制可执行文件到插件根目录..."
-rm -rf "./NegativeCutter"
-# -L 强制跟随符号链接：PyInstaller onedir 在 macOS 上会对 Python.framework 等使用
-# 符号链接，但 macOS 的代码签名和安全策略可能对符号链接有额外限制；确保插件内是
-# 普通文件/目录。
-cp -RL "$EXE_DIR" "./NegativeCutter"
-chmod +x "./NegativeCutter/NegativeCutter"
+mkdir -p "$STAGE/$PLUGIN_DIR"
+# Explicit allowlist: the release must not inherit arbitrary dirty-tree files.
+ALLOWLIST=(
+  ApplierAgent.lua BatchProcess.lua CropCleaner.lua DetectFrames.lua Feedback.lua
+  ImportAgent.lua Info.lua Init.lua PluginInfoProvider.lua ProcessAgent.lua
+  Shutdown.lua Sponsor.lua ThumbnailAgent.lua json.lua LICENSE README.md INSTALL.md
+  THIRD-PARTY-LICENSES.md detect_thumb.py filmcrop NegativeCutter
+)
+for item in "${ALLOWLIST[@]}"; do
+  [[ -e "$item" && ! -L "$item" ]] || { echo "ERROR: missing or symlinked allowlist entry: $item" >&2; exit 1; }
+  if [[ "$item" == "NegativeCutter" ]]; then
+    ditto "$item" "$STAGE/$PLUGIN_DIR/$item"
+  else
+    cp -RL "$item" "$STAGE/$PLUGIN_DIR/$item"
+  fi
+done
+# These paths are never release components, even if a future allowlist edit is
+# attempted without a corresponding review.
+find "$STAGE/$PLUGIN_DIR" \( -path '*/marketing/*' -o -path '*/.claude/*' -o -name marketing -o -name .claude \) -print -quit | grep -q . && { echo "ERROR: forbidden marketing/.claude release component" >&2; exit 1; }
+cp install.sh "$STAGE/install.sh"
+chmod 755 "$STAGE/install.sh"
+find "$STAGE/$PLUGIN_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$STAGE/$PLUGIN_DIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
-# 4. 清理 Python 字节码缓存，避免打包进 zip
-echo "==> 清理 __pycache__..."
-find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-find . -type f -name '*.pyc' -delete 2>/dev/null || true
-find . -type f -name '*.pyo' -delete 2>/dev/null || true
-
-# 5. 打包（注意：不要把 dist/ 和 build/ 打进 zip）
-echo "==> 打包插件..."
-TMP_PACKAGE_DIR="${TMPDIR:-/tmp}/filmcrop-build-$$"
-rm -rf "$TMP_PACKAGE_DIR"
-mkdir -p "$TMP_PACKAGE_DIR"
-trap 'rm -rf "$TMP_PACKAGE_DIR"' EXIT
-
-# 复制插件目录到临时目录，并剔除开发/构建产物
-cp -R "$SCRIPT_DIR" "$TMP_PACKAGE_DIR/${PLUGIN_NAME}.lrplugin"
-cd "$TMP_PACKAGE_DIR/${PLUGIN_NAME}.lrplugin"
-rm -rf build dist __pycache__ .DS_Store
-rm -rf tests WORK CLAUDE.md debug_visualize.py detect_debug.log
-find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-find . -type f -name '*.pyc' -delete 2>/dev/null || true
-find . -type f -name '*.pyo' -delete 2>/dev/null || true
-
-# A dirty source tree must never leak development artifacts into a release.
-forbidden=$(find . \
-  \( -name tests -o -name WORK -o -name CLAUDE.md -o \
-     -name debug_visualize.py -o -name detect_debug.log \) -print)
-if [[ -n "$forbidden" ]]; then
-  echo "ERROR: forbidden development artifacts remain in release stage:" >&2
-  echo "$forbidden" >&2
-  exit 1
-fi
-
-# Every Lightroom menu entry must resolve inside the staged plugin.
-python3 - <<'PY'
-import re
+python3 - "$STAGE/$PLUGIN_DIR" <<'PY'
+import re, sys
 from pathlib import Path
-
-root = Path('.')
+root = Path(sys.argv[1])
 info = (root / 'Info.lua').read_text(encoding='utf-8')
-missing = [p for p in re.findall(r'''file\s*=\s*["']([^"']+)["']''', info)
-           if not (root / p).is_file()]
+missing = [name for name in re.findall(r'''file\s*=\s*["']([^"']+)["']''', info)
+           if not (root / name).is_file()]
 if missing:
     raise SystemExit('ERROR: Info.lua references missing files: ' + ', '.join(missing))
 PY
 
-# 6. 生成 zip
-cd "$TMP_PACKAGE_DIR"
-zip -r -q "$OUTPUT_ZIP" "${PLUGIN_NAME}.lrplugin"
+python3 - "$STAGE/$PLUGIN_DIR" <<'PY'
+import hashlib, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+entries=[]
+for p in sorted(root.rglob('*')):
+    if p.is_symlink(): entries.append(f'link  {p.relative_to(root).as_posix()} -> {p.readlink()}\n')
+    elif p.is_file() and p.name != 'RELEASE-MANIFEST.sha256': entries.append(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(root).as_posix()}\n')
+(root / 'RELEASE-MANIFEST.sha256').write_text(''.join(entries), encoding='utf-8')
+PY
 
-echo "==> 构建完成: $OUTPUT_ZIP"
-ls -lh "$OUTPUT_ZIP"
+verify_manifest() {
+  python3 - "$1" <<'PY'
+import hashlib, re, sys
+from pathlib import Path
+root = Path(sys.argv[1]); manifest = root / 'RELEASE-MANIFEST.sha256'
+lines = manifest.read_text(encoding='utf-8').splitlines(); seen = set(); expected = set(); root_real=root.resolve()
+for line in lines:
+    target=None
+    if line.startswith('link  '): rel, sep, target=line[6:].partition(' -> '); digest=None; assert sep
+    else:
+        m = re.fullmatch(r'([0-9a-f]{64})  ([^/][^\n]*)', line)
+        if not m: raise SystemExit('ERROR: malformed manifest')
+        digest, rel = m.groups()
+    if rel.startswith('/') or '..' in Path(rel).parts or rel in seen: raise SystemExit('ERROR: unsafe manifest path')
+    seen.add(rel); expected.add(rel)
+    path = root / rel
+    if target is not None:
+        if not path.is_symlink() or Path(target).is_absolute() or not (path.parent / target).resolve().is_relative_to(root_real): raise SystemExit('ERROR: unsafe manifest symlink')
+    elif not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest: raise SystemExit('ERROR: manifest checksum mismatch')
+actual = {p.relative_to(root).as_posix() for p in root.rglob('*') if (p.is_file() or p.is_symlink()) and p.name != manifest.name}
+if actual != expected: raise SystemExit('ERROR: manifest exact release file set mismatch')
+PY
+}
+verify_manifest "$STAGE/$PLUGIN_DIR"
+codesign --verify --deep --strict "$STAGE/$PLUGIN_DIR/NegativeCutter"
+
+smoke() {
+  local plugin="$1" fixture="$2" frames="$3" format="$4" output
+  output="$("$plugin/NegativeCutter/NegativeCutter" "$fixture" --frames "$frames" --format "$format" --original "$fixture")"
+  python3 - "$output" "$frames" <<'PY'
+import json, sys
+result = json.loads(sys.argv[1])
+if result.get('error') or result.get('needsReview') is not False or type(result.get('frameCount')) is not int or result['frameCount'] != int(sys.argv[2]):
+    raise SystemExit('ERROR: release smoke JSON contract failed')
+PY
+}
+# Both staged and extracted release bundles must run their generation-specific
+# inputs before a ZIP can survive this script: --frames 6 --format 35mm --original;
+# --frames 4 --format 645 --original.
+smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
+smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645
+ARCHIVE_ROOT="$STAGE/archive-root"
+mkdir "$ARCHIVE_ROOT"
+ditto "$STAGE/install.sh" "$ARCHIVE_ROOT/install.sh"
+ditto "$STAGE/$PLUGIN_DIR" "$ARCHIVE_ROOT/$PLUGIN_DIR"
+( cd "$ARCHIVE_ROOT" && ditto -c -k --sequesterRsrc . "$OUTPUT_ZIP" )
+mkdir -p "$EXTRACTED"
+ditto -x -k "$OUTPUT_ZIP" "$EXTRACTED"
+verify_manifest "$EXTRACTED/$PLUGIN_DIR"
+codesign --verify --deep --strict "$EXTRACTED/$PLUGIN_DIR/NegativeCutter"
+python3 - "$OUTPUT_ZIP" "$STAGE" <<'PY'
+import sys, zipfile
+from pathlib import Path
+archive, stage = map(Path, sys.argv[1:])
+names = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
+# __MACOSX and AppleDouble (._*) are ditto metadata, not release payload.
+metadata = {n for n in names if n.startswith('__MACOSX/') or '/._' in n or n.startswith('._')}
+actual = names - metadata
+if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
+if any('/marketing/' in n or '/.claude/' in n or n.startswith('marketing/') or n.startswith('.claude/') for n in actual): raise SystemExit('ERROR: forbidden ZIP payload entry')
+if any('/__pycache__/' in n or n.endswith(('.pyc', '.pyo')) for n in actual): raise SystemExit('ERROR: bytecode leaked into ZIP payload')
+if not {'install.sh', 'NegativeCutter-135.lrplugin/RELEASE-MANIFEST.sha256'} <= actual: raise SystemExit('ERROR: ZIP payload missing required roots; payload count=' + str(len(actual)))
+PY
+smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
+smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_120" 4 645
+echo "Built $OUTPUT_ZIP"

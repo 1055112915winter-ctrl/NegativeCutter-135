@@ -9,10 +9,17 @@
 
 ## 安装
 
-1. 打开 Lightroom Classic
-2. 菜单：`文件 > 增效工具管理器`
-3. 点击 `添加`，选择 `NegativeCutter-135.lrplugin` 文件夹
-4. 确保插件状态显示为「正在运行」
+从 Release 页面下载 **release ZIP** 并解压。压缩包顶层包含 **top-level `install.sh`** 与 `NegativeCutter-135.lrplugin`；在终端进入解压目录后执行：
+
+```bash
+./install.sh
+```
+
+脚本会 **validates the release and stages it before replacing the installed plugin**，并在出错时 **rolls back if installation fails**。完成后请 **Restart Lightroom**。
+
+`NEGATIVECUTTER_MODULES_DIR` 是 **advanced/test override**，仅用于高级用户或测试指定 Modules 目录；普通安装无需设置。
+
+如果无法运行脚本，可保留使用 Lightroom 的 **Plugin Manager** 手动安装：`文件 > 增效工具管理器` → `添加` → 选择 `NegativeCutter-135.lrplugin` 文件夹；确认状态显示为「正在运行」后重启 Lightroom。
 
 ## 使用
 

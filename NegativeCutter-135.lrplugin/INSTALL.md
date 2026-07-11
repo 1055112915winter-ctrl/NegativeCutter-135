@@ -10,18 +10,23 @@
 
 ## 安装步骤
 
-1. **解压** `NegativeCutter-135-v2.4.4.zip`
-2. （重要）如果从浏览器或网盘下载，macOS 会给文件加上「隔离属性」。打开终端，执行以下命令解除隔离（把路径换成你实际解压的位置）：
+推荐使用 Release 页面下载的 **release ZIP**：解压后，顶层会有 **top-level `install.sh`** 和 `NegativeCutter-135.lrplugin`。
+
+1. 在终端进入解压后的目录并运行：
    ```bash
-   xattr -dr com.apple.quarantine ~/Downloads/NegativeCutter-135.lrplugin
+   ./install.sh
+   ```
+   安装脚本会 **validates the release and stages it before replacing the installed plugin**；若安装过程中失败，**rolls back if installation fails**，保留原有插件。安装完成后请 **Restart Lightroom**，让它重新载入插件。
+2. （重要）如果从浏览器或网盘下载，macOS 会给文件加上「隔离属性」。打开终端，执行以下命令解除隔离（把路径换成你实际解压的位置）后，再运行安装脚本：
+   ```bash
+   xattr -dr com.apple.quarantine /path/to/extracted-release
    ```
    否则 Lightroom 可能无法加载插件或无法执行内置检测引擎。
-3. 打开 **Lightroom Classic**
-4. 菜单：`文件 → 增效工具管理器`（File → Plug-in Manager）
-5. 点击左下角的 **`添加`**（Add）
-6. 选择解压后的 **`NegativeCutter-135.lrplugin`** 文件夹
-7. 确保插件状态显示为**「正在运行」**（Running），并在插件信息面板看到「✓ 已找到打包引擎 (NegativeCutter)」
-8. 关闭增效工具管理器
+
+### 高级选项与手动安装
+
+- `NEGATIVECUTTER_MODULES_DIR` 是 **advanced/test override**，仅供高级用户或测试指定非默认 Modules 目录；普通安装请不要设置它。
+- 如果不能运行脚本，仍可使用 Lightroom 的 **Plugin Manager**：打开 `文件 → 增效工具管理器`，点击 `添加`，选择解压后的 `NegativeCutter-135.lrplugin` 文件夹，确认状态显示为「正在运行」，然后重启 Lightroom。
 
 ## 使用
 
@@ -64,8 +69,8 @@ Lightroom SDK 不支持插件内置快捷键，需要通过 macOS 系统设置�
 | 问题 | 解决方式 |
 |------|----------|
 | 插件管理器显示「✗ 未找到检测引擎」 | 确认 `.lrplugin` 文件夹中包含 `NegativeCutter` 可执行文件；如从网络下载，执行 `xattr -dr com.apple.quarantine /path/to/NegativeCutter-135.lrplugin` |
-| "检测引擎不存在" | 同上，或重新下载完整 ZIP 包 |
-| "导入 filmcrop 失败: No module named 'numpy'" | 说明你当前用的是 `detect_thumb.py` 而不是打包引擎。检查 `.lrplugin` 中是否存在 `NegativeCutter` 可执行文件，或重新执行 build.sh / 下载新版 |
+| "检测引擎不存在" | 同上，或重新下载并重新运行 Release 的 `install.sh` |
+| "导入 filmcrop 失败: No module named 'numpy'" | 说明你当前用的是 `detect_thumb.py` 而不是打包引擎。检查 `.lrplugin` 中是否存在 `NegativeCutter` 可执行文件，然后重新运行 Release 的 `install.sh` |
 | "检测失败 / 未检测到帧" | 检查当前是否在 Lightroom 中选中了图片；查看日志 `~/Library/Logs/Adobe/Lightroom/LrClassicLogs/NegativeCutter.log` |
 | 检测帧数不正确 | 调整预期帧数设置；黑白负片效果最好 |
 | 边缘仍有脏边或白边 | 尝试在对话框切换胶片类型，或调整裁剪后手动微调 |
