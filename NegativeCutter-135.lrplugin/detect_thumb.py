@@ -47,38 +47,76 @@ elif sys.path[0] != _script_dir:
     sys.path.remove(_script_dir)
     sys.path.insert(0, _script_dir)
 
-_detector_mtime = 0
-try:
-    from filmcrop.detector import analyze_image
-    _log("import analyze_image OK")
-    import filmcrop.detector as _detector_mod
-    _detector_path = getattr(_detector_mod, "__file__", "unknown")
-    try:
-        _detector_mtime = int(Path(_detector_path).stat().st_mtime)
-    except (OSError, ValueError):
-        _detector_mtime = 0
-except ImportError:
-    _log("ImportError from filmcrop, trying fallback paths")
-    fallback_dirs = [_script_dir]
-    for d in fallback_dirs:
-        if d not in sys.path:
-            sys.path.insert(0, d)
+def _load_detector():
+    """Delay detector loading so preview rendering remains a lightweight path."""
     try:
         from filmcrop.detector import analyze_image
-        import filmcrop.detector as _detector_mod
-        _detector_path = getattr(_detector_mod, "__file__", "unknown")
-        try:
-            _detector_mtime = int(Path(_detector_path).stat().st_mtime)
-        except (OSError, ValueError):
-            _detector_mtime = 0
-        _log("import analyze_image OK (fallback)")
-    except Exception as _e:
-        _log(f"import failed: {_e}")
-        print(json.dumps({"error": f"导入 filmcrop 失败: {_e}", "traceback": traceback.format_exc(), "sys_executable": sys.executable, "sys_path": sys.path[:8], "cwd": str(Path.cwd()), "script_dir": _script_dir}, separators=(",", ":")))
-        sys.exit(1)
+        import filmcrop.detector as detector_mod
+    except ImportError:
+        _log("ImportError from filmcrop, trying fallback paths")
+        if _script_dir not in sys.path:
+            sys.path.insert(0, _script_dir)
+        from filmcrop.detector import analyze_image
+        import filmcrop.detector as detector_mod
+    detector_path = getattr(detector_mod, "__file__", "unknown")
+    try:
+        detector_mtime = int(Path(detector_path).stat().st_mtime)
+    except (OSError, ValueError):
+        detector_mtime = 0
+    _log("import analyze_image OK")
+    return analyze_image, detector_path, detector_mtime
+
+
+def _preview_error(message):
+    print(json.dumps({"error": str(message)}, separators=(",", ":")))
+    print(str(message), file=sys.stderr)
+    return 2
+
+
+def _render_preview_cli(args):
+    from filmcrop.preview import adjust_frames, render_preview
+
+    required = ("input", "frames_json", "source_width", "source_height", "output")
+    missing = [name for name in required if getattr(args, name) is None]
+    if missing:
+        return _preview_error("missing required preview arguments: " + ", ".join(missing))
+    try:
+        payload = json.loads(Path(args.frames_json).read_text(encoding="utf-8"))
+        frames = payload.get("frames") if isinstance(payload, dict) else payload
+        if not isinstance(frames, list):
+            raise ValueError("frames JSON must be a list or an object with a frames list")
+        adjusted = adjust_frames(frames, args.source_width, args.source_height, {
+            "top": args.top_px, "bottom": args.bottom_px,
+            "left": args.left_px, "right": args.right_px,
+        })
+        output = render_preview(args.input, adjusted, args.output)
+    except Exception as exc:
+        _log(f"render preview FAILED: {exc}\n{traceback.format_exc()}")
+        return _preview_error(exc)
+    print(json.dumps({"previewPath": str(output), "frameCount": len(adjusted)}, separators=(",", ":")))
+    return 0
 
 
 def main():
+    if "--render-preview" in sys.argv[1:]:
+        import argparse
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--render-preview", action="store_true")
+        parser.add_argument("--input")
+        parser.add_argument("--frames-json", dest="frames_json")
+        parser.add_argument("--source-width", dest="source_width", type=int)
+        parser.add_argument("--source-height", dest="source_height", type=int)
+        parser.add_argument("--top-px", dest="top_px", type=float, default=0)
+        parser.add_argument("--bottom-px", dest="bottom_px", type=float, default=0)
+        parser.add_argument("--left-px", dest="left_px", type=float, default=0)
+        parser.add_argument("--right-px", dest="right_px", type=float, default=0)
+        parser.add_argument("--output")
+        try:
+            args = parser.parse_args(sys.argv[1:])
+        except SystemExit:
+            return _preview_error("invalid preview arguments")
+        return _render_preview_cli(args)
+
     if len(sys.argv) < 2:
         result = {
             "error": "用法: python3 detect_thumb.py <thumb_path> [--frames N] [--cleanup-scale X.X] [--original <path>]"
@@ -130,6 +168,7 @@ def main():
         sys.exit(1)
 
     try:
+        analyze_image, detector_path, detector_mtime = _load_detector()
         _log(f"analyze_image start: thumb={thumb_path}, frames={expected_frames}, original={original_path}")
         result = analyze_image(
             thumb_path,
@@ -146,8 +185,8 @@ def main():
         result["_diag"] = {
             "pythonExecutable": sys.executable,
             "pythonVersion": sys.version.split()[0],
-            "detectorPath": _detector_path,
-            "detectorMtime": _detector_mtime,
+            "detectorPath": detector_path,
+            "detectorMtime": detector_mtime,
             "scriptDir": _script_dir,
         }
         output = json.dumps(result, separators=(",", ":"))
@@ -168,7 +207,9 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        status = main()
+        if status:
+            sys.exit(status)
     except SystemExit:
         raise
     except Exception as _e:

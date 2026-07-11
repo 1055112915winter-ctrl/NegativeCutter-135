@@ -29,6 +29,7 @@ a = Analysis(
         'filmcrop.detector',
         'filmcrop.export',
         'filmcrop.api',
+        'filmcrop.preview',
         # canonical shared detection core
         'negativecutter_core',
         'negativecutter_core.detector',
@@ -41,6 +42,7 @@ a = Analysis(
         # PIL image plugins (lazy-loaded, must be explicit for PyInstaller)
         'PIL.TiffImagePlugin',
         'PIL.JpegImagePlugin',
+        'PIL.ImageDraw',
         'PIL.PngImagePlugin',
         'PIL.BmpImagePlugin',
         'PIL.GifImagePlugin',
