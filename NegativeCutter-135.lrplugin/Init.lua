@@ -25,6 +25,7 @@ pcall(function()
   local old = io.open(marker, "r")
   if old then old:close() end
   local f = io.open(marker, "w"); if f then f:write(tostring(os.time())); f:close() end
+  if PreviewAgent.scavenge then PreviewAgent.scavenge(previewRoot, LrFileUtils, "current") end
 end)
 
 -- 验证：写临时日志文件

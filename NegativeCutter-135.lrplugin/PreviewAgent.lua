@@ -12,7 +12,7 @@ function PreviewAgent.review(context, request, adapters)
   adapters = adapters or {}; local scheduler = adapters.scheduler or {}
   local clock, fs, renderer = adapters.clock, adapters.filesystem or {}, adapters.renderer or {}
   nextId = nextId + 1
-  local id = adapters.uuid and adapters.uuid() or string.format("%08x-%08x", os.time(), math.random(0,0xffffff))
+  local id = adapters.uuid and adapters.uuid() or (function() local h=""; for i=1,32 do h=h..string.format("%x", math.random(0,15)) end; return h:sub(1,8).."-"..h:sub(9,12).."-4"..h:sub(14,16).."-a"..h:sub(18,20).."-"..h:sub(21) end)()
   local root = adapters.previewRoot or fs.previewRoot or "/tmp/NegativeCutterPreview"
   local dir = root .. "/" .. id
   if fs.mkdir then fs.mkdir(dir) end
@@ -40,7 +40,7 @@ function PreviewAgent.review(context, request, adapters)
     end)
     if state.closed or state.generation ~= gen then return end
     if not ok or result == false then state.pending=false; state.status="failure"; return end
-    if fs.publish then slot=(slot+1)%2; fs.publish(out, dir .. "/active.png", gen) end
+    if fs.publish then local ok,err=fs.publish(out, dir .. "/active.png", gen); if ok==false then state.pending=false; state.status="failure"; return end; slot=(slot+1)%2 end
     if type(result) ~= "table" then result = {frames=result} end
     publish(gen, result)
   end
