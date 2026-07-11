@@ -19,7 +19,7 @@
 
 - [ ] **Step 1: Write failing static contract tests**
 
-Add tests requiring `build.sh` to remove the stale runtime, invoke staged/extracted smoke validation, generate `RELEASE-MANIFEST.sha256`, require exact top-level ZIP entries, and reject `.claude`/`marketing`. Add tests requiring `install.sh` to use a sibling staging directory, `target -> backup -> target` replacement, rollback, trap cleanup, and manifest verification.
+Add executable black-box tests using temporary source/Modules directories. Require `build.sh` to remove the stale runtime, invoke staged/extracted smoke validation, generate `RELEASE-MANIFEST.sha256`, require exact top-level ZIP entries, reject `.claude`/`marketing`, reject missing/extra/duplicate/root-escaping manifest entries, and delete any ZIP after a gate failure. Require `install.sh` to use sibling staging/backup directories on the target filesystem, reject symlink or non-directory source/target and pre-existing staging/backup paths, set restrictive `umask`, verify manifest/signature before replacement, and use `target -> backup -> target` with rollback/trap cleanup. Simulate checksum/signature/copy/second-rename failures and assert the installed target inventory is byte-for-byte unchanged.
 
 - [ ] **Step 2: Run the contract tests and confirm failure**
 
@@ -29,7 +29,7 @@ Expected: FAIL because the release manifest, staged/extracted checks, and canoni
 
 - [ ] **Step 3: Add minimal build/installer implementation**
 
-Implement only the tested shell helpers: explicit staging allowlist, manifest writer/verifier, smoke validator, extracted ZIP validator, and rollback-safe installer. Keep fixture paths configurable through `NEGATIVECUTTER_RELEASE_135_FIXTURE` / `NEGATIVECUTTER_RELEASE_120_FIXTURE`.
+Implement only the tested shell helpers: explicit staging allowlist, manifest writer/verifier, smoke validator, extracted ZIP validator, and rollback-safe installer. `install.sh` defaults to `$HOME/Library/Application Support/Adobe/Lightroom/Modules` and allows an explicit `NEGATIVECUTTER_MODULES_DIR` override for tests/advanced users. Keep fixture paths configurable through `NEGATIVECUTTER_RELEASE_135_FIXTURE` / `NEGATIVECUTTER_RELEASE_120_FIXTURE`. Document checksums/signatures as accidental-corruption and incomplete-copy protection only; this release has no signed publisher-identity/pinned-TeamIdentifier authenticity contract.
 
 - [ ] **Step 4: Re-run contract tests and shell syntax checks**
 
@@ -68,7 +68,7 @@ Expected: exactly `install.sh` and `NegativeCutter-135.lrplugin/` at ZIP root; n
 - Modify: `NegativeCutter-135.lrplugin/README.md`
 - Test: `NegativeCutter-135.lrplugin/tests/test_plugin_hardening.py`
 
-- [ ] **Step 1: Add failing documentation-contract test if needed**
+- [ ] **Step 1: Add a failing documentation-contract test**
 
 Require the installation documentation to name the packaged top-level `install.sh`, full replacement behavior, and Lightroom restart requirement.
 
@@ -80,7 +80,7 @@ Replace obsolete manual-only/old ZIP version wording with the validated release 
 
 Run: `scripts/run_unit_tests.sh && FILMCROP_FIXTURE_ROOT="$PWD/test_files" scripts/run_fixture_tests.sh && PYTHONPATH=NegativeCutter-135.lrplugin python3 -m unittest NegativeCutter-135.lrplugin/tests/test_plugin_hardening.py -v && bash -n NegativeCutter-135.lrplugin/build.sh && bash -n NegativeCutter-135.lrplugin/install.sh && git diff --check`
 
-Expected: all checks exit 0.
+Expected: all checks exit 0, including the black-box installer failures proving that the installed target remains byte-for-byte unchanged and no failed build gate leaves a ZIP behind.
 
 - [ ] **Step 4: Commit deliberate source/docs changes**
 
