@@ -132,10 +132,6 @@ def main():
     lr_width = None
     lr_height = None
 
-    from negativecutter_core.formats import FILM_FORMATS
-
-    _FORMAT_MAP = {code: spec.aspect_ratio for code, spec in FILM_FORMATS.items()}
-
     i = 2
     while i < len(sys.argv):
         arg = sys.argv[i]
@@ -160,8 +156,6 @@ def main():
         else:
             i += 1
 
-    format_ratio = _FORMAT_MAP.get(format_hint) if format_hint else None
-
     if not Path(thumb_path).exists():
         result = {"error": f"文件不存在: {thumb_path}"}
         print(json.dumps(result, separators=(",", ":")))
@@ -169,6 +163,11 @@ def main():
 
     try:
         analyze_image, detector_path, detector_mtime = _load_detector()
+        from negativecutter_core.formats import FILM_FORMATS
+
+        format_ratio = (
+            FILM_FORMATS[format_hint].aspect_ratio if format_hint else None
+        )
         _log(f"analyze_image start: thumb={thumb_path}, frames={expected_frames}, original={original_path}")
         result = analyze_image(
             thumb_path,

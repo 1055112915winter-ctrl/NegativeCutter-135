@@ -11,6 +11,17 @@ PLUGIN = Path(__file__).resolve().parents[1]
 
 
 class PluginHardeningTests(unittest.TestCase):
+    def test_shutdown_preserves_watch_cleanup_while_closing_previews(self):
+        source = (PLUGIN / "Shutdown.lua").read_text(encoding="utf-8")
+        for required in (
+            "PreviewAgent.closeAll()",
+            "prefs.watchActive = false",
+            "prefs.watchJsonPath = nil",
+            "prefs.autoWatchActive = false",
+            "prefs.autoWatchJsonPath = nil",
+        ):
+            self.assertIn(required, source)
+
     def _write_manifest(self, plugin: Path):
         entries = []
         for path in sorted(plugin.rglob("*")):

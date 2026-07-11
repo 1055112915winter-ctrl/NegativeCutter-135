@@ -1,98 +1,155 @@
--- Live crop preview orchestration.  Deliberately dependency injected so it can
--- be exercised without Lightroom (and so rendering remains a replaceable seam).
+-- SDK-agnostic live-preview state machine.  The runtime supplies the worker,
+-- renderer and owned filesystem; every scheduled generation is immutable.
 local PreviewAgent = {}
 local registry = {}
-local nextId = 0
-local function clone(v) if type(v) ~= 'table' then return v end; local n={}; for k,x in pairs(v) do n[k]=clone(x) end; return n end
 
-local function now(clock) return (clock and clock.now and clock.now()) or (os.time() * 1000) end
-local function spawn(s, f) if s and s.spawn then return s.spawn(f) end; return f() end
-local function sleep(s, ms) if s and s.sleep then return s.sleep(ms) end end
-function PreviewAgent.makeAdapters(LrTasks, LrFileUtils)
-  return {scheduler={startAsyncTask=function(f) return LrTasks.startAsyncTask(f) end,spawn=function(f) return LrTasks.startAsyncTask(f) end,sleep=function(ms) return LrTasks.sleep(ms/1000) end},clock={now=function() return os.time()*1000 + math.floor((os.clock()%1)*1000) end},filesystem={mkdir=function(p) return LrFileUtils.createAllDirectories(p) end}}
+local function clone(value)
+  if type(value) ~= "table" then return value end
+  local copy = {}
+  for key, item in pairs(value) do copy[key] = clone(item) end
+  return copy
 end
 
-function PreviewAgent.review(context, request, adapters)
-  adapters = adapters or {}; local scheduler = adapters.scheduler or {}
-  local clock, fs, renderer = adapters.clock, adapters.filesystem or {}, adapters.renderer or {}
-  nextId = nextId + 1
-  local id = adapters.uuid and adapters.uuid() or (function() local h=""; for i=1,32 do h=h..string.format("%x", math.random(0,15)) end; return h:sub(1,8).."-"..h:sub(9,12).."-4"..h:sub(14,16).."-a"..h:sub(18,20).."-"..h:sub(21) end)()
-  local root = adapters.previewRoot or fs.previewRoot or "/tmp/NegativeCutterPreview"
-  local dir = root .. "/" .. id
-  if fs.mkdir then fs.mkdir(dir) end
-  local state = {topPx=0,bottomPx=0,leftPx=0,rightPx=0,generation=0,deadline=0,pending=false,closed=false,status="idle",frames={}}
-  local current, activeGeneration, workerActive = nil, 0, false
-  local slot = 0
-  local dialog = { state=state, id=id, dir=dir }
+local function now(clock) return (clock and clock.now and clock.now()) or (os.time() * 1000) end
+local function spawn(scheduler, fn) if scheduler and scheduler.spawn then return scheduler.spawn(fn) end; return fn() end
+local function sleep(scheduler, milliseconds) if scheduler and scheduler.sleep then scheduler.sleep(milliseconds) end end
+
+function PreviewAgent.review(context, request, runtime)
+  runtime, context, request = runtime or {}, context or {}, request or {}
+  local scheduler, clock = runtime.scheduler or {}, runtime.clock
+  local filesystem, renderer = runtime.filesystem or {}, runtime.renderer or {}
+  local id, dir
+  if runtime.createDialogDirectory then
+    id, dir = runtime:createDialogDirectory()
+    if not id then return nil, dir or "preview directory allocation failed" end
+  else
+    id = runtime.uuid and runtime.uuid() or tostring(math.random(1000000, 9999999))
+    dir = (runtime.previewRoot or "/tmp/NegativeCutterPreview") .. "/" .. id
+    if filesystem.mkdir then filesystem:mkdir(dir) end
+  end
+
+  local state = { topPx = 0, bottomPx = 0, leftPx = 0, rightPx = 0, generation = 0,
+    deadline = 0, pending = false, closed = false, status = "idle", frames = {}, previewPath = nil }
+  local dialog = { id = id, dir = dir, state = state, _runtime = runtime, _context = context }
+  local snapshots, workerActive, rendering, cleaned = {}, false, false, false
+  local current, previous
   registry[id] = dialog
 
-  local function publish(gen, payload)
-    if state.closed or gen ~= state.generation then return false end
-    state.status = "ready"; state.pending = false; state.frames = payload.frames or payload
-    if payload.offsets then
-      for k,v in pairs(payload.offsets) do if type(v)=="number" then state[k]=v end end
-    end
-    current = payload; activeGeneration = gen; return true
+  local function removeFile(path)
+    if path and filesystem.removeFile then filesystem:removeFile(path) end
   end
-  local function worker(gen, req, deadline)
-    sleep(scheduler, math.max(0, deadline - now(clock)))
-    if state.closed or state.generation ~= gen or now(clock) < deadline then return end
-    local out = dir .. "/slot-" .. tostring((slot + 1) % 2) .. ".png"
-    local ok, result = pcall(function()
+  local function cleanCandidate(path)
+    removeFile(path .. ".partial"); removeFile(path)
+  end
+  local function removeOwned()
+    if cleaned then return end
+    cleaned = true
+    if filesystem.removeOwned then filesystem:removeOwned(dir)
+    elseif filesystem.remove then filesystem:remove(dir) end
+  end
+  local function finishClosed()
+    if state.closed and not rendering then removeOwned() end
+  end
+  local function fail(generation, message, candidate)
+    cleanCandidate(candidate)
+    if not state.closed and generation == state.generation then
+      state.pending, state.status, state.error = false, "failure", tostring(message or "preview publication failed")
+    end
+  end
+  local function bind(generation, payload, path)
+    if state.closed or generation ~= state.generation then return false end
+    state.status, state.pending, state.error = "ready", false, nil
+    state.frames, state.previewPath = clone(payload.frames or {}), path
+    if payload.offsets then
+      for key, value in pairs(payload.offsets) do if type(value) == "number" then state[key] = value end end
+    end
+    if context.bindPreview then context.bindPreview(path) end
+    local expired = previous
+    previous, current = current, { path = path, generation = generation, payload = clone(payload) }
+    if expired then removeFile(expired.path) end
+    return true
+  end
+  local function renderGeneration(generation, snapshot)
+    local suffix = runtime.uuid and runtime.uuid() or id
+    local candidate = dir .. "/preview-" .. tostring(generation) .. "-" .. suffix .. ".jpg"
+    local partial = candidate .. ".partial"
+    rendering = true
+    local ok, payload, renderError = pcall(function()
       if not renderer.render then error("renderer.render missing") end
-      return renderer.render(req, out, context)
+      return renderer.render(snapshot, partial, context)
     end)
-    if state.closed or state.generation ~= gen then return end
-    if not ok or result == false then state.pending=false; state.status="failure"; return end
-    if fs.publish then local ok,err=fs.publish(out, dir .. "/active.png", gen); if ok==false then state.pending=false; state.status="failure"; return end; slot=(slot+1)%2 end
-    if type(result) ~= "table" then result = {frames=result} end
-    publish(gen, result)
+    rendering = false
+    if state.closed then cleanCandidate(candidate); finishClosed(); return end
+    if generation ~= state.generation then cleanCandidate(candidate); return end
+    if not ok or payload == nil or payload == false then return fail(generation, renderError or payload, candidate) end
+    local finalOk, finalError = true, nil
+    if filesystem.finalizePreview then finalOk, finalError = filesystem:finalizePreview(partial, candidate) end
+    if finalOk == false then return fail(generation, finalError, candidate) end
+    -- The active pointer is written only after the immutable image is final.
+    if state.closed or generation ~= state.generation then return cleanCandidate(candidate) end
+    local pointerOk, pointerError = true, nil
+    if filesystem.publishActive then pointerOk, pointerError = filesystem:publishActive({ path = candidate, generation = generation }, dir .. "/active.json") end
+    if pointerOk == false then return fail(generation, pointerError, candidate) end
+    if not bind(generation, type(payload) == "table" and payload or { frames = payload }, candidate) then cleanCandidate(candidate) end
+  end
+  local function runWorker()
+    while not state.closed do
+      local generation, deadline = state.generation, state.deadline
+      while not state.closed and generation == state.generation do
+        local remaining = deadline - now(clock)
+        if remaining <= 0 then break end
+        sleep(scheduler, remaining)
+        if generation ~= state.generation then break end
+      end
+      if state.closed then break end
+      if generation == state.generation and now(clock) >= state.deadline then
+        renderGeneration(generation, snapshots[generation])
+        if generation == state.generation then break end
+      end
+    end
+    workerActive = false
+    finishClosed()
   end
   local function ensureWorker()
     if workerActive then return end
-    workerActive=true
-    spawn(scheduler, function()
-      while not state.closed do
-        local gen, deadline, req = state.generation, state.deadline, dialog._request
-        worker(gen, req, deadline)
-        if state.closed or gen == state.generation then break end
-      end
-      workerActive=false
-    end)
+    workerActive = true; spawn(scheduler, runWorker)
   end
-  function dialog:edit(req)
+  local function schedule(snapshot)
     if state.closed then return false end
-    state.generation = state.generation + 1; local gen = state.generation; local deadline = now(clock) + 120
-    state.deadline = deadline; state.pending=true; state.status="pending"
-    dialog._request=clone(req); ensureWorker(); return gen
+    state.generation = state.generation + 1
+    state.deadline, state.pending, state.status, state.error = now(clock) + 120, true, "pending", nil
+    snapshots[state.generation] = clone(snapshot)
+    ensureWorker()
+    return state.generation
+  end
+  function dialog:edit(editRequest)
+    return schedule(editRequest)
   end
   function dialog:Reset()
-    if state.closed then return false end
-    state.topPx,state.bottomPx,state.leftPx,state.rightPx=0,0,0,0
-    state.generation=state.generation+1; local gen=state.generation; local deadline=now(clock)+120
-    state.deadline=deadline; state.pending=true; state.status="pending"
-    dialog._request={offsets={topPx=0,bottomPx=0,leftPx=0,rightPx=0}, source=clone(request)}; ensureWorker(); return true
+    local resetState = function()
+      state.topPx, state.bottomPx, state.leftPx, state.rightPx = 0, 0, 0, 0
+    end
+    if self._context.suspendObservers then self._context.suspendObservers(resetState) else resetState() end
+    return schedule({ frames = clone(request.frames), sourceWidth = request.sourceWidth, sourceHeight = request.sourceHeight,
+      offsets = { topPx = 0, bottomPx = 0, leftPx = 0, rightPx = 0 } })
   end
   function dialog:Confirm()
     if state.closed or state.pending or state.status ~= "ready" then return false end
-    if context and context.confirm then return context.confirm(current) end; return current
+    return context.confirm and context.confirm(current and current.payload) or current
   end
   function dialog:Cancel() if state.closed then return false end; self:close(); return true end
   function dialog:close()
-    if state.closed then return end; state.closed=true; state.pending=false; registry[id]=nil
-    if fs.remove then fs.remove(dir) end
+    if state.closed then return end
+    state.closed, state.pending = true, false; registry[id] = nil
+    if not rendering then removeOwned() end
   end
   return dialog
 end
 
-function PreviewAgent.closeAll() local all={}; for _,d in pairs(registry) do all[#all+1]=d end; for _,d in ipairs(all) do d:close() end; registry={} end
-function PreviewAgent.registry() return registry end
-function PreviewAgent.scavenge(root, fs, currentSession)
-  if not fs or not fs.list then return 0 end
-  local n=0
-  for _,name in ipairs(fs.list(root) or {}) do
-    if name ~= currentSession and name:match("^[%x]+-[%x]+$") then if fs.remove then fs.remove(root.."/"..name); n=n+1 end end
-  end
-  return n
+function PreviewAgent.closeAll()
+  local dialogs = {}; for _, dialog in pairs(registry) do dialogs[#dialogs + 1] = dialog end
+  for _, dialog in ipairs(dialogs) do dialog:close() end
+  registry = {}
 end
+function PreviewAgent.registry() return registry end
 return PreviewAgent

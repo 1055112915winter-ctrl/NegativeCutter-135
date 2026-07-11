@@ -9,8 +9,8 @@ local PreviewAgent = require 'PreviewAgent'
 
 local logger = LrLogger('NegativeCutter')
 logger:enable("logfile")
-
 local prefs = LrPrefs.prefsForPlugin()
+
 pcall(function() PreviewAgent.closeAll() end)
 if prefs.watchActive then
   prefs.watchActive = false

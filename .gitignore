@@ -57,6 +57,7 @@ NegativeCutter-135.lrplugin/tests/*
 !NegativeCutter-135.lrplugin/tests/test_plugin_hardening.py
 !NegativeCutter-135.lrplugin/tests/test_applier_rotation_safety.lua
 !NegativeCutter-135.lrplugin/tests/test_process_agent_orientation.lua
+!NegativeCutter-135.lrplugin/tests/test_preview_runtime.lua
 NegativeCutter-135.lrplugin/scripts/
 NegativeCutter-135.lrplugin/CLAUDE.md
 NegativeCutter-135.lrplugin/debug_visualize.py
