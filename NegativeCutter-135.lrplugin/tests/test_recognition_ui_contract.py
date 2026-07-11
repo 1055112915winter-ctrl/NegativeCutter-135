@@ -50,6 +50,8 @@ class RecognitionUIContractTests(unittest.TestCase):
 
     def test_native_progress_and_terminal_accounting_contracts_are_explicit(self):
         for source in (self.detect, self.batch):
+            self.assertIn("LrTasks.pcall", source)
+            self.assertNotIn("xpcall", source)
             for token in (
                 "LrProgressScope",
                 "setPortionComplete(terminalPhotos, totalPhotos)",

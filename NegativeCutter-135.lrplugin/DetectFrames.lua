@@ -100,7 +100,7 @@ local function runRecognition(catalog, photos, settings, runtime, adapters)
     terminalPhotos = terminalPhotos + 1
     progress:setPortionComplete(terminalPhotos, totalPhotos)
   end
-  local ok, unexpected = xpcall(function()
+  local ok, unexpected = LrTasks.pcall(function()
     for index, photo in ipairs(photos) do
       if progress:isCanceled() then stats.canceled = true; break end
       local fallbackName = photo.getFormattedMetadata and photo:getFormattedMetadata("fileName") or "scan"
@@ -161,7 +161,7 @@ local function runRecognition(catalog, photos, settings, runtime, adapters)
         end
       end
     end
-  end, debug.traceback)
+  end)
   progress:done()
   if not ok then stats.unexpectedError = tostring(unexpected) end
   stats.processedPhotos = terminalPhotos

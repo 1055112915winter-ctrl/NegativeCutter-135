@@ -8,7 +8,7 @@ _G.import = function(name)
   if name == "LrLogger" then return function() return { enable = function() end, trace = function() end, error = function() end } end end
   if name == "LrPathUtils" then return { child = function(a, b) return a .. "/" .. b end } end
   if name == "LrPrefs" then return { prefsForPlugin = function() return {} end } end
-  if name == "LrTasks" then return { startAsyncTask = function(fn) asyncBody = fn end } end
+  if name == "LrTasks" then return { startAsyncTask = function(fn) asyncBody = fn end, pcall = pcall } end
   if name == "LrApplication" or name == "LrDialogs" or name == "LrView" or name == "LrProgressScope" then return {} end
   error("unexpected import " .. tostring(name))
 end
