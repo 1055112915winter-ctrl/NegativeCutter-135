@@ -81,6 +81,14 @@ class PluginHardeningTests(unittest.TestCase):
                 with self.subTest(document=document.name, text=text):
                     self.assertIn(text, source)
 
+    def test_installation_docs_describe_verified_live_preview_and_progress(self):
+        required = ("逐张预览", "整批统一", "不预览", "120 毫秒", "重置", "确认", "进度", "取消")
+        for document in (PLUGIN / "INSTALL.md", PLUGIN / "README.md"):
+            source = document.read_text(encoding="utf-8")
+            for text in required:
+                with self.subTest(document=document.name, text=text):
+                    self.assertIn(text, source)
+
     def test_install_rejects_malformed_or_tampered_manifest_before_target_change(self):
         installer = PLUGIN / "install.sh"
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,6 +217,27 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertGreaterEqual(source.count("codesign --verify --deep --strict"), 2)
         self.assertIn("SOURCE_ALLOWLIST", source)
 
+    def test_release_includes_preview_runtime_and_gates_render_artifacts(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        for runtime_file in ("PreviewAgent.lua", "PreviewRuntime.lua"):
+            self.assertGreaterEqual(source.count(runtime_file), 2)
+        for required in (
+            "render_smoke",
+            "Image.new",
+            "--render-preview",
+            '"frames"',
+            "*.frames.json",
+            "active.json",
+            "preview-*.jpg",
+            "*.partial",
+            ".negativecutter-preview-owner",
+            "NegativeCutterPreview",
+        ):
+            self.assertIn(required, source)
+        archive = 'ditto -c -k --sequesterRsrc . "$OUTPUT_ZIP"'
+        self.assertLess(source.index('render_smoke "$STAGE/$PLUGIN_DIR"'), source.index(archive))
+        self.assertGreater(source.index('render_smoke "$EXTRACTED/$PLUGIN_DIR"'), source.index(archive))
+
     def test_installer_exit_trap_rolls_back_until_commit(self):
         source = (PLUGIN / "install.sh").read_text(encoding="utf-8")
         self.assertIn("trap finish EXIT", source)
@@ -234,6 +263,7 @@ class PluginHardeningTests(unittest.TestCase):
         inventory = "SOURCE_ALLOWLIST="
         self.assertLess(source.index(cleanup), source.index(inventory))
         self.assertIn("ERROR: unclassified source entry", source)
+        self.assertIn("rm -rf __pycache__", source)
 
     def test_build_uses_ditto_to_preserve_runtime_signature_when_staging(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
