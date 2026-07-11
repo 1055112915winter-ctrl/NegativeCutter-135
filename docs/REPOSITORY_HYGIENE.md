@@ -17,13 +17,12 @@
 Ignored does not mean disposable. Test fixtures and feedback evidence are
 retained until their facts are encoded in durable regression tests.
 
-## Measured cleanup backlog (2026-07-11)
+## Cleanup result (2026-07-11)
 
-- `.git`: about 15GB, including 54 interrupted `tmp_pack_*` files totaling
-  14.07GiB;
-- `.claude`: about 868MB with nine registered worktrees;
-- `release`: about 443MB of historical local packages;
-- plugin runtime: about 131MB;
+- `.git`: 32MB after safely removing 54 interrupted `tmp_pack_*` files
+  (14.07GiB) and running `git gc --prune=now`; `git count-objects` reports
+  zero garbage;
+- `.claude`: 216KB with only the authoritative main worktree registered;
 - `test_files`: about 5.4GB and intentionally retained.
 
 Before removing a worktree, run `git status --short`, identify its branch and
