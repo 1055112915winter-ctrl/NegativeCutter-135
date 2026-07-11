@@ -18,7 +18,7 @@ Version-only comparison is insufficient because source can change without a vers
 4. Run the packaged executable against `52191.tif` with `--frames 6 --format 35mm --original <same-path>` and `Untitled (3).tif` with `--frames 4 --format 645 --original <same-path>`. The paths default to `test_files/` and may be overridden by `NEGATIVECUTTER_RELEASE_135_FIXTURE` and `NEGATIVECUTTER_RELEASE_120_FIXTURE`.
 5. Require exit code zero and valid JSON. Each result must omit `error`, contain integer `frameCount` equal to 6 or 4, and contain JSON boolean `needsReview` equal to `false`.
 6. Stage the release from an explicit manifest rather than copying the development tree. The ZIP has exactly two top-level entries: `NegativeCutter-135.lrplugin/` and `install.sh`. The plugin allowlist contains its Lightroom Lua/menu resources, Python adapter package, notices/docs, icon assets, and the newly built complete `NegativeCutter/` runtime. Build/test/work/log files and every path component named `marketing` or `.claude` are hard failures. Any unclassified source entry fails staging.
-7. Generate SHA-256 manifests for every regular file in the complete staged plugin, including all of `NegativeCutter/_internal`, and make the installer verify the manifest after copying.
+7. Generate `NegativeCutter-135.lrplugin/RELEASE-MANIFEST.sha256` with one SHA-256 entry for every other regular file under the staged plugin, including all of `NegativeCutter/_internal`; the manifest explicitly excludes itself. Paths are normalized plugin-relative paths, must be unique, and must not be absolute or contain `..`. Verification requires an exact set match, so missing, extra, duplicate, or root-escaping entries fail. The installer reads the adjacent manifest from the packaged source and applies those same exact-set and path-safety checks to the staged copy.
 8. Validate all Lightroom menu references and run `codesign --verify --deep --strict` on the staged engine.
 9. Create the ZIP, reopen it in a fresh temporary directory, require the exact top-level inventory, revalidate the SHA-256 manifest, rerun `codesign --verify --deep --strict`, and rerun both packaged-engine smokes from the extracted plugin.
 10. If any post-create check fails, delete the ZIP. Only a ZIP passing every extracted-artifact check is publishable.
@@ -42,7 +42,7 @@ The installer prints the installed plugin path and asks the user to restart Ligh
 
 ## Tests
 
-Static contract tests will first cover the new build gates, exact top-level inventory, explicit staging allowlist, installer inclusion, rollback behavior, traps, and complete SHA-256 verification. Shell syntax checks will cover both scripts. The completed release build must then pass staged and extracted packaged 135/120 smokes, exact ZIP inventory, full manifest verification, and staged/extracted engine signature verification.
+Static contract tests will first cover the new build gates, exact top-level inventory, explicit staging allowlist, installer inclusion, rollback behavior, traps, and complete SHA-256 verification, including missing/extra/duplicate/root-escaping manifest cases and the manifest's self-exclusion. Shell syntax checks will cover both scripts. The completed release build must then pass staged and extracted packaged 135/120 smokes, exact ZIP inventory, full manifest verification, and staged/extracted engine signature verification.
 
 ## Release boundary
 
