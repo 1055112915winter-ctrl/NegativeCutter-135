@@ -145,6 +145,22 @@ class PluginHardeningTests(unittest.TestCase):
         for required in ("52191.tif", "Untitled (3).tif", "--frames 6 --format 35mm --original", "--frames 4 --format 645 --original", "needsReview", "frameCount"):
             self.assertIn(required, source)
 
+    def test_release_gates_both_fixture_smokes_before_archive_and_after_extract(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        staged_120 = 'smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645'
+        archive = '( cd "$STAGE" && zip -qr "$OUTPUT_ZIP" install.sh "$PLUGIN_DIR" )'
+        extracted_135 = 'smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm'
+        self.assertLess(source.index(staged_120), source.index(archive))
+        self.assertLess(source.index(archive), source.index(extracted_135))
+        self.assertGreaterEqual(source.count("codesign --verify --deep --strict"), 2)
+        self.assertIn("SOURCE_ALLOWLIST", source)
+
+    def test_installer_exit_trap_rolls_back_until_commit(self):
+        source = (PLUGIN / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("trap finish EXIT", source)
+        self.assertIn("trap 'exit 1' INT TERM", source)
+        self.assertLess(source.index("committed=1"), source.index("trap - EXIT INT TERM"))
+
     def test_api_module_imports_without_fastapi(self):
         code = f"""
 import importlib.abc
