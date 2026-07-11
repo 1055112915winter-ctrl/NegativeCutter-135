@@ -192,6 +192,11 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertLess(source.index(cleanup), source.index(inventory))
         self.assertIn("ERROR: unclassified source entry", source)
 
+    def test_build_uses_ditto_to_preserve_runtime_signature_when_staging(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        self.assertIn('ditto "$item" "$STAGE/$PLUGIN_DIR/$item"', source)
+        self.assertNotIn("codesign --force --deep --sign - \"$STAGE", source)
+
     def test_api_module_imports_without_fastapi(self):
         code = f"""
 import importlib.abc

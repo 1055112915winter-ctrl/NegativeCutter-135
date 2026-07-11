@@ -39,7 +39,7 @@ python3 -m PyInstaller NegativeCutter.spec
 codesign --force --deep --sign - dist/NegativeCutter
 if [[ -d dist/NegativeCutter && -x dist/NegativeCutter/NegativeCutter ]]; then
   rm -rf NegativeCutter
-  cp -RL dist/NegativeCutter NegativeCutter
+  ditto dist/NegativeCutter NegativeCutter
 elif [[ ! -x dist/NegativeCutter ]]; then
   echo "ERROR: executable missing from dist/NegativeCutter" >&2
   exit 1
@@ -55,7 +55,11 @@ ALLOWLIST=(
 )
 for item in "${ALLOWLIST[@]}"; do
   [[ -e "$item" && ! -L "$item" ]] || { echo "ERROR: missing or symlinked allowlist entry: $item" >&2; exit 1; }
-  cp -RL "$item" "$STAGE/$PLUGIN_DIR/$item"
+  if [[ "$item" == "NegativeCutter" ]]; then
+    ditto "$item" "$STAGE/$PLUGIN_DIR/$item"
+  else
+    cp -RL "$item" "$STAGE/$PLUGIN_DIR/$item"
+  fi
 done
 # These paths are never release components, even if a future allowlist edit is
 # attempted without a corresponding review.
