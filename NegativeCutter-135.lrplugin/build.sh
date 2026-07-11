@@ -134,7 +134,7 @@ ARCHIVE_ROOT="$STAGE/archive-root"
 mkdir "$ARCHIVE_ROOT"
 ditto "$STAGE/install.sh" "$ARCHIVE_ROOT/install.sh"
 ditto "$STAGE/$PLUGIN_DIR" "$ARCHIVE_ROOT/$PLUGIN_DIR"
-( cd "$ARCHIVE_ROOT" && ditto -c -k --sequesterRsrc --keepParent install.sh "$PLUGIN_DIR" "$OUTPUT_ZIP" )
+( cd "$ARCHIVE_ROOT" && ditto -c -k --sequesterRsrc . "$OUTPUT_ZIP" )
 mkdir -p "$EXTRACTED"
 ditto -x -k "$OUTPUT_ZIP" "$EXTRACTED"
 verify_manifest "$EXTRACTED/$PLUGIN_DIR"
