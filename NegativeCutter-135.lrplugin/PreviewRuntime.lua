@@ -47,6 +47,8 @@ end
 function PreviewRuntime.create(sdk, processAgent, options)
   sdk, options = sdk or {}, options or {}
   local tasks, dates, fileUtils = sdk.LrTasks or {}, sdk.LrDate or {}, sdk.LrFileUtils or {}
+  local binding, view, dialogs = sdk.LrBinding or {}, sdk.LrView or {}, sdk.LrDialogs or {}
+  local functionContext = sdk.LrFunctionContext or {}
   local runtime = {
     previewRoot = options.previewRoot or "/tmp/NegativeCutterPreview",
     sessionId = options.sessionId or (options.uuid or defaultUuid)(),
@@ -76,6 +78,30 @@ function PreviewRuntime.create(sdk, processAgent, options)
       return payload
     end,
   }
+  function runtime:withContext(name, fn)
+    if not functionContext.callWithContext then error("LrFunctionContext.callWithContext unavailable") end
+    return functionContext.callWithContext(name, fn)
+  end
+  function runtime:makePropertyTable(context)
+    if not binding.makePropertyTable then error("LrBinding.makePropertyTable unavailable") end
+    return binding.makePropertyTable(context)
+  end
+  function runtime:addObserver(properties, key, callback)
+    if not properties or not properties.addObserver then error("property table observer unavailable") end
+    return properties:addObserver(key, callback)
+  end
+  function runtime:viewFactory()
+    if not view.osFactory then error("LrView.osFactory unavailable") end
+    return view.osFactory()
+  end
+  function runtime:bind(key)
+    if not view.bind then error("LrView.bind unavailable") end
+    return view.bind(key)
+  end
+  function runtime:presentModalDialog(spec)
+    if not dialogs.presentModalDialog then error("LrDialogs.presentModalDialog unavailable") end
+    return dialogs.presentModalDialog(spec)
+  end
 
   local function pathFor(value)
     if isUuid(value) then return child(runtime.previewRoot, value) end

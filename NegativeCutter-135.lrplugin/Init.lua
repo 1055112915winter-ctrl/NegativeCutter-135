@@ -22,6 +22,8 @@ previewRoot = previewRoot .. "/NegativeCutterPreview"
 pcall(function()
   local runtime = PreviewRuntime.create({
     LrTasks = import 'LrTasks', LrDate = import 'LrDate', LrFileUtils = LrFileUtils,
+    LrBinding = import 'LrBinding', LrView = import 'LrView', LrDialogs = import 'LrDialogs',
+    LrFunctionContext = import 'LrFunctionContext',
   }, ProcessAgent, { previewRoot = previewRoot })
   runtime:initialize()
   PreviewRuntime.setCurrent(runtime)

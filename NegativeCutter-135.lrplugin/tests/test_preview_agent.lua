@@ -39,7 +39,7 @@ local function fixture(options)
       return { frames = clone(request.frames), offsets = clone(request.offsets) }
     end },
   }
-  local dialog = Agent.review({ bindPreview = function(path) bound[#bound + 1] = path end }, options.request or { frames = { { left = 1 } }, sourceWidth = 100, sourceHeight = 200 }, runtime)
+  local dialog = Agent.newSession({ bindPreview = function(path) bound[#bound + 1] = path end }, options.request or { frames = { { left = 1 } }, sourceWidth = 100, sourceHeight = 200 }, runtime)
   local function drain()
     while #jobs > 0 do local job = table.remove(jobs, 1); job() end
   end
@@ -123,6 +123,41 @@ do
   assert(#f.bound == 0 and f.removed[#f.removed] == "owned:" .. f.dialog.dir, "close during render must clean in worker finally")
   local other = fixture(); other.dialog:edit({ frames = { { left = 2 } } }); Agent.closeAll(); other.drain()
   assert(#other.bound == 0 and other.dialog.state.closed, "Shutdown must close dialogs and forbid publication")
+end
+
+local function modalRuntime(modalResult)
+  local time = 0
+  local factory = setmetatable({}, { __index = function(_, name)
+    return function(_, spec) spec = spec or {}; spec.kind = name; return spec end
+  end })
+  return {
+    previewRoot = "/preview",
+    uuid = function() return "12345678-1234-4123-a123-123456789abc" end,
+    createDialogDirectory = function() return "12345678-1234-4123-a123-123456789abc", "/preview/12345678-1234-4123-a123-123456789abc" end,
+    scheduler = { spawn = function(fn) fn() end, sleep = function(ms) time = time + ms end },
+    clock = { now = function() return time end },
+    renderer = { render = function(request) return { frames = clone(request.frames), offsets = clone(request.offsets) } end },
+    filesystem = { finalizePreview = function() return true end, publishActive = function() return true end,
+      removeFile = function() return true end, removeOwned = function() return true end },
+    makePropertyTable = function() return {} end,
+    addObserver = function() end,
+    viewFactory = function() return factory end,
+    bind = function(_, key) return key end,
+    presentModalDialog = function(_, spec)
+      assert(spec.contents and spec.actionVerb == "确认" and spec.cancelVerb == "取消", "review must present the real modal")
+      return modalResult
+    end,
+  }
+end
+
+do
+  local request = { frames = { { left = 1 } }, thumbnailPath = "/thumb.jpg", sourceWidth = 100, sourceHeight = 200, title = "Preview" }
+  local confirmed = Agent.review({}, request, modalRuntime("ok"))
+  assert(confirmed.status == "confirmed" and #confirmed.frames == 1 and confirmed.offsets.topPx == 0, "review confirmed schema mismatch")
+  local canceled = Agent.review({}, request, modalRuntime("cancel"))
+  assert(canceled.status == "canceled" and next(canceled, "status") == nil, "review canceled schema mismatch")
+  local invalid = Agent.review({}, { frames = {} }, modalRuntime("ok"))
+  assert(invalid.status == "error" and type(invalid.error) == "string", "review error schema mismatch")
 end
 
 print("preview agent tests passed")
