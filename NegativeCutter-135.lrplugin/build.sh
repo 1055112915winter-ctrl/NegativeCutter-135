@@ -144,9 +144,13 @@ import sys, zipfile
 from pathlib import Path
 archive, stage = map(Path, sys.argv[1:])
 expected = {'install.sh'} | {f'NegativeCutter-135.lrplugin/{p.relative_to(stage / "NegativeCutter-135.lrplugin").as_posix()}' for p in (stage / 'NegativeCutter-135.lrplugin').rglob('*') if p.is_file()}
-actual = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
+names = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
+# __MACOSX and AppleDouble (._*) are ditto metadata, not release payload.
+metadata = {n for n in names if n.startswith('__MACOSX/') or '/._' in n or n.startswith('._')}
+actual = names - metadata
 if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact release file set')
 if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
+if any('/marketing/' in n or '/.claude/' in n or n.startswith('marketing/') or n.startswith('.claude/') for n in actual): raise SystemExit('ERROR: forbidden ZIP payload entry')
 PY
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_120" 4 645

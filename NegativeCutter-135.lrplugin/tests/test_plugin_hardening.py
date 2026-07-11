@@ -234,6 +234,12 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertIn("ditto -c -k --sequesterRsrc", source)
         self.assertIn("ditto -x -k", source)
 
+    def test_zip_inventory_allows_only_macos_metadata_outside_payload(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        self.assertIn("__MACOSX/", source)
+        self.assertIn("AppleDouble", source)
+        self.assertIn("unexpected ZIP top-level entry", source)
+
     def test_api_module_imports_without_fastapi(self):
         code = f"""
 import importlib.abc
