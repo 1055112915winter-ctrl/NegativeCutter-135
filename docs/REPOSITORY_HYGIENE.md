@@ -24,6 +24,9 @@ retained until their facts are encoded in durable regression tests.
   zero garbage;
 - `.claude`: 216KB with only the authoritative main worktree registered;
 - `test_files`: about 5.4GB and intentionally retained.
+- root plugin `build/` and `dist/` intermediates: removed after package and
+  runtime smoke verification; the explicit APP, plugin runtime, and ZIP
+  deliverables remain local and untracked.
 
 Before removing a worktree, run `git status --short`, identify its branch and
 HEAD, and confirm all useful changes are reachable or migrated. Before deleting
