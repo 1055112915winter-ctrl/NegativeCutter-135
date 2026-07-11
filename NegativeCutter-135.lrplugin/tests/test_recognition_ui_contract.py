@@ -22,7 +22,7 @@ class RecognitionUIContractTests(unittest.TestCase):
     def test_both_entries_use_only_the_initialized_runtime_and_explicit_stages(self):
         for source in (self.detect, self.batch):
             for token in (
-                "PreviewRuntime.current()",
+                "PreviewRuntime.current(ProcessAgent)",
                 "ProcessAgent.detectPhoto",
                 "PreviewAgent.review",
                 "ProcessAgent.adjustDetection",

@@ -135,4 +135,15 @@ local sdkCompatibleId, sdkCompatibleDir = sdkCompatibleRuntime:createDialogDirec
 io.open, sdk.LrFileUtils.writeFile = originalIoOpen, originalWriteFile
 assert(sdkCompatibleId == sdkCompatibleDialog, "runtime requires nonexistent LrFileUtils.writeFile")
 assert(files[sdkCompatibleDir .. "/.negativecutter-preview-owner"] == Runtime.ownerMarker(session, sdkCompatibleDialog), "io fallback did not publish owner marker")
+
+-- Lightroom menu scripts can receive a fresh module environment even though
+-- Init.lua already ran. A menu entry must be able to recover a current runtime
+-- instead of depending on module-local state from plugin initialization.
+Runtime.setCurrent(nil)
+local recovered = Runtime.current(processAgent, {
+  sdk = sdk,
+  previewRoot = "/recovered-root",
+  sessionId = session,
+})
+assert(recovered and recovered.previewRoot == "/recovered-root", "menu runtime did not recover after module state reset")
 print("preview runtime tests passed")

@@ -147,7 +147,7 @@ LrTasks.startAsyncTask(function()
   local catalog = LrApplication.activeCatalog(); local photos = catalog:getTargetPhotos()
   if not photos or #photos == 0 then LrDialogs.message("NegativeCutter - 批量处理", "请先选择要处理的胶片扫描文件", "info"); return end
   local settings = chooseSettings(#photos); if not settings then return end
-  local runtime = PreviewRuntime.current()
+  local runtime = PreviewRuntime.current(ProcessAgent)
   if not runtime then LrDialogs.message("NegativeCutter", "预览运行时尚未初始化，请重启 Lightroom 后重试", "critical"); return end
   local progress = LrProgressScope { title = "NegativeCutter - 批量处理", caption = "准备处理" }
   progress:setCancelable(true)

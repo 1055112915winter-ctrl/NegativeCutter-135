@@ -245,5 +245,26 @@ function PreviewRuntime.create(sdk, processAgent, options)
 end
 
 function PreviewRuntime.setCurrent(runtime) currentRuntime = runtime end
-function PreviewRuntime.current() return currentRuntime end
+function PreviewRuntime.current(processAgent, options)
+  if currentRuntime or not processAgent then return currentRuntime end
+  options = options or {}
+  local sdk = options.sdk
+  local runtimeOptions = clone(options)
+  runtimeOptions.sdk = nil
+  if not sdk then
+    local pathUtils = import 'LrPathUtils'
+    sdk = {
+      LrTasks = import 'LrTasks', LrDate = import 'LrDate', LrFileUtils = import 'LrFileUtils',
+      LrBinding = import 'LrBinding', LrView = import 'LrView', LrDialogs = import 'LrDialogs',
+      LrFunctionContext = import 'LrFunctionContext',
+    }
+    if not runtimeOptions.previewRoot then
+      local temp = pathUtils and pathUtils.getStandardFilePath and pathUtils.getStandardFilePath('temp') or "/tmp"
+      runtimeOptions.previewRoot = temp .. "/NegativeCutterPreview"
+    end
+  end
+  currentRuntime = PreviewRuntime.create(sdk, processAgent, runtimeOptions)
+  currentRuntime:initialize()
+  return currentRuntime
+end
 return PreviewRuntime

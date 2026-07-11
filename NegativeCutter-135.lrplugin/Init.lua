@@ -4,9 +4,7 @@
 ]]--
 
 local LrLogger = import 'LrLogger'
-local LrFileUtils = import 'LrFileUtils'
 local LrPathUtils = import 'LrPathUtils'
-local PreviewAgent = require 'PreviewAgent'
 local PreviewRuntime = require 'PreviewRuntime'
 local ProcessAgent = require 'ProcessAgent'
 
@@ -19,15 +17,10 @@ logger:trace("=== NegativeCutter Init.lua 已加载 ===")
 local previewRoot = (LrPathUtils and LrPathUtils.getStandardFilePath and
     LrPathUtils.getStandardFilePath('temp')) or "/tmp"
 previewRoot = previewRoot .. "/NegativeCutterPreview"
-pcall(function()
-  local runtime = PreviewRuntime.create({
-    LrTasks = import 'LrTasks', LrDate = import 'LrDate', LrFileUtils = LrFileUtils,
-    LrBinding = import 'LrBinding', LrView = import 'LrView', LrDialogs = import 'LrDialogs',
-    LrFunctionContext = import 'LrFunctionContext',
-  }, ProcessAgent, { previewRoot = previewRoot })
-  runtime:initialize()
-  PreviewRuntime.setCurrent(runtime)
+local previewOk, previewError = pcall(function()
+  PreviewRuntime.current(ProcessAgent, { previewRoot = previewRoot })
 end)
+if not previewOk then logger:error("Preview runtime initialization failed: " .. tostring(previewError)) end
 
 -- 验证：写临时日志文件
 pcall(function()
