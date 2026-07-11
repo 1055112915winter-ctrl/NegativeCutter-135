@@ -13,6 +13,10 @@ end
 local function now(clock) return (clock and clock.now and clock.now()) or (os.time() * 1000) end
 local function spawn(scheduler, fn) if scheduler and scheduler.spawn then return scheduler.spawn(fn) end; return fn() end
 local function sleep(scheduler, milliseconds) if scheduler and scheduler.sleep then scheduler.sleep(milliseconds) end end
+local function protected(runtime, fn)
+  if runtime and runtime.protectedCall then return runtime:protectedCall(fn) end
+  return pcall(fn)
+end
 
 function PreviewAgent.newSession(context, request, runtime)
   runtime, context, request = runtime or {}, context or {}, request or {}
@@ -75,7 +79,7 @@ function PreviewAgent.newSession(context, request, runtime)
     local candidate = dir .. "/preview-" .. tostring(generation) .. "-" .. suffix .. ".jpg"
     local partial = candidate .. ".partial"
     rendering = true
-    local ok, payload, renderError = pcall(function()
+    local ok, payload, renderError = protected(runtime, function()
       if not renderer.render then error("renderer.render missing") end
       return renderer.render(snapshot, partial, context)
     end)
@@ -234,7 +238,7 @@ local function reviewWithContext(functionContext, request, runtime)
       f:static_text { title = bind "failureText", fill_horizontal = 1 },
     },
   }
-  local ok, modalResult = pcall(function()
+  local ok, modalResult = protected(runtime, function()
     return runtime:presentModalDialog {
       title = request.title, contents = contents, actionVerb = "确认", cancelVerb = "取消",
       actionBinding = {
@@ -264,7 +268,7 @@ function PreviewAgent.review(context, request, runtime)
   if context ~= nil then return reviewWithContext(context, request, runtime) end
   if not runtime.withContext then return errorResult("Lightroom function context is unavailable") end
   local result
-  local ok, failure = pcall(function()
+  local ok, failure = protected(runtime, function()
     runtime:withContext("NegativeCutterPreview", function(createdContext)
       result = reviewWithContext(createdContext, request, runtime)
     end)

@@ -66,11 +66,14 @@ function PreviewRuntime.create(sdk, processAgent, options)
       return value
     end,
   }
+  function runtime:protectedCall(fn)
+    return (tasks.pcall or pcall)(fn)
+  end
   runtime.renderer = {
     render = function(request, outputPath)
       local copied = clone(request)
       copied.outputPath = outputPath
-      local ok, payload, renderError = (tasks.pcall or pcall)(function()
+      local ok, payload, renderError = runtime:protectedCall(function()
         return processAgent.renderPreview(copied)
       end)
       if not ok then return nil, tostring(payload) end

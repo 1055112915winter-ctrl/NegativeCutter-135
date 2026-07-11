@@ -32,6 +32,11 @@ class PreviewDialogContractTests(unittest.TestCase):
         ):
             self.assertIn(adapter, self.runtime)
 
+    def test_all_yielding_preview_boundaries_use_runtime_protection(self):
+        self.assertIn("protectedCall", self.runtime)
+        self.assertGreaterEqual(self.agent.count("protected(runtime"), 3)
+        self.assertNotIn("pcall(function()", self.agent)
+
     def test_dialog_has_one_picture_four_numeric_controls_and_actions(self):
         self.assertEqual(self.agent.count("f:picture"), 1)
         self.assertEqual(self.agent.count("f:edit_field"), 4)
