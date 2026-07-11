@@ -109,4 +109,30 @@ local quotedPath = quotedRoot .. "/" .. dialog .. '/preview-1.jpg'
 local pointerPath = quotedRoot .. "/" .. dialog .. "/active.json"
 assert(quotedRuntime.filesystem:publishActive({ path = quotedPath, generation = 1 }, pointerPath), "quoted pointer publish failed")
 assert(quotedFiles[pointerPath] == '{"path":"/preview-\\"root\\\\folder/' .. dialog .. '/preview-1.jpg","generation":1}', "active pointer must be valid escaped JSON")
+
+-- Lightroom exposes LrFileUtils.readFile but no writeFile API.  Exercise the
+-- production io.open fallback so a real Lightroom session can create its owner
+-- marker instead of leaking twenty empty candidate directories.
+local originalWriteFile, originalIoOpen = sdk.LrFileUtils.writeFile, io.open
+sdk.LrFileUtils.writeFile = nil
+io.open = function(path, mode)
+  if mode == "wb" then
+    return {
+      write = function(_, content) files[path] = content; return true end,
+      close = function() return true end,
+    }
+  end
+  return originalIoOpen(path, mode)
+end
+local sdkCompatibleDialog = "55555555-5555-4555-a555-555555555555"
+local sdkCompatibleRuntime = Runtime.create(sdk, processAgent, {
+  previewRoot = "/sdk-compatible-root",
+  sessionId = session,
+  uuid = function() return sdkCompatibleDialog end,
+})
+sdkCompatibleRuntime:initialize()
+local sdkCompatibleId, sdkCompatibleDir = sdkCompatibleRuntime:createDialogDirectory()
+io.open, sdk.LrFileUtils.writeFile = originalIoOpen, originalWriteFile
+assert(sdkCompatibleId == sdkCompatibleDialog, "runtime requires nonexistent LrFileUtils.writeFile")
+assert(files[sdkCompatibleDir .. "/.negativecutter-preview-owner"] == Runtime.ownerMarker(session, sdkCompatibleDialog), "io fallback did not publish owner marker")
 print("preview runtime tests passed")

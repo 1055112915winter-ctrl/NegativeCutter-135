@@ -121,6 +121,33 @@ function PreviewRuntime.create(sdk, processAgent, options)
     end
     return not rest:find("//", 1, true) and relative:sub(-1) ~= "/"
   end
+  local function writeFile(path, content)
+    -- Kept as a test/legacy adapter only. Lightroom's documented API does not
+    -- provide LrFileUtils.writeFile, so production falls through to io.open.
+    if fileUtils.writeFile then return fileUtils.writeFile(path, content) end
+    local handle, openError = io.open(path, "wb")
+    if not handle then return false, tostring(openError or "open failed") end
+    local ok, writeError = pcall(function() handle:write(content) end)
+    local closeOk, closeError = pcall(function() return handle:close() end)
+    if not ok then return false, tostring(writeError or "write failed") end
+    if not closeOk or closeError == false then return false, "close failed" end
+    return true
+  end
+  local function readFile(path)
+    if fileUtils.readFile then return fileUtils.readFile(path) end
+    local handle = io.open(path, "rb")
+    if not handle then return nil end
+    local content = handle:read("*a")
+    handle:close()
+    return content
+  end
+  local function directoryEntries(path)
+    if fileUtils.filesInDirectory then return fileUtils.filesInDirectory(path) or {} end
+    if not fileUtils.directoryEntries then return {} end
+    local entries = {}
+    for entry in fileUtils.directoryEntries(path) do entries[#entries + 1] = entry end
+    return entries
+  end
   local filesystem = {}
   function filesystem:mkdir(path)
     if path ~= runtime.previewRoot and not pathFor(path) then return false, "outside preview root" end
@@ -130,8 +157,8 @@ function PreviewRuntime.create(sdk, processAgent, options)
   function filesystem:writeAtomic(path, content)
     if not isPreviewPath(path) then return false, "outside preview root" end
     local partial = path .. ".partial"
-    local ok = fileUtils.writeFile and fileUtils.writeFile(partial, content)
-    if ok == false then return false, "write failed" end
+    local ok, writeError = writeFile(partial, content)
+    if not ok then return false, writeError or "write failed" end
     local moved = fileUtils.move and fileUtils.move(partial, path)
     if moved == false or moved == nil then return false, "rename failed" end
     return true
@@ -167,15 +194,15 @@ function PreviewRuntime.create(sdk, processAgent, options)
   end
   function filesystem:readMarker(value)
     local directory = pathFor(value)
-    return directory and fileUtils.readFile and fileUtils.readFile(directory .. "/" .. OWNER_FILE) or nil
+    return directory and readFile(directory .. "/" .. OWNER_FILE) or nil
   end
   function filesystem:listOwned()
     local owned = {}
-    for _, path in ipairs((fileUtils.filesInDirectory and fileUtils.filesInDirectory(runtime.previewRoot)) or {}) do
+    for _, path in ipairs(directoryEntries(runtime.previewRoot)) do
       local id = type(path) == "string" and path:match("([^/]+)$") or nil
       local directory = pathFor(id)
       if directory then
-        local marker = fileUtils.readFile and fileUtils.readFile(directory .. "/" .. OWNER_FILE)
+        local marker = readFile(directory .. "/" .. OWNER_FILE)
         if validOwnerMarker(marker, id) then owned[#owned + 1] = { id = id, path = directory, marker = marker } end
       end
     end
@@ -199,6 +226,9 @@ function PreviewRuntime.create(sdk, processAgent, options)
         filesystem:mkdir(directory)
         local markerOk = filesystem:writeAtomic(directory .. "/" .. OWNER_FILE, PreviewRuntime.ownerMarker(self.sessionId, id))
         if markerOk then return id, directory end
+        -- This directory was allocated by this call and has no valid owner
+        -- marker, so remove it directly instead of leaking failed candidates.
+        if fileUtils.delete then fileUtils.delete(directory) end
       end
     end
     return nil, "could not allocate preview directory"
