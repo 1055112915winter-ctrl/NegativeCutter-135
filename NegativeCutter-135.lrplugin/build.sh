@@ -19,6 +19,15 @@ trap 'rm -rf "$STAGE"' EXIT
 
 [[ -f "$FIXTURE_135" && ! -L "$FIXTURE_135" ]] || { echo "ERROR: missing 135 release fixture: $FIXTURE_135" >&2; exit 1; }
 [[ -f "$FIXTURE_120" && ! -L "$FIXTURE_120" ]] || { echo "ERROR: missing 120 release fixture: $FIXTURE_120" >&2; exit 1; }
+# Classify every source-tree component before touching build output.  Release
+# inclusion is intentionally narrower than this source inventory.
+SOURCE_ALLOWLIST=(.gitignore ApplierAgent.lua BatchProcess.lua CropCleaner.lua DetectFrames.lua Feedback.lua INSTALL.md ImportAgent.lua Info.lua Init.lua LICENSE NegativeCutter NegativeCutter.spec PluginInfoProvider.lua ProcessAgent.lua README.md Shutdown.lua Sponsor.lua THIRD-PARTY-LICENSES.md ThumbnailAgent.lua build.sh detect_thumb.py filmcrop install.sh json.lua tests)
+for source_item in "$SCRIPT_DIR"/* "$SCRIPT_DIR"/.[!.]*; do
+  source_name="$(basename "$source_item")"
+  [[ "$source_name" == . || "$source_name" == .. ]] && continue
+  case " ${SOURCE_ALLOWLIST[*]} " in *" $source_name "*) ;; *) echo "ERROR: unclassified source entry: $source_name" >&2; exit 1;; esac
+  [[ "$source_name" != marketing && "$source_name" != .claude ]] || { echo "ERROR: forbidden source component: $source_name" >&2; exit 1; }
+done
 # Never validate an old executable or accidentally retain a previous release.
 rm -rf build dist NegativeCutter
 rm -f "$OUTPUT_ZIP"
@@ -92,20 +101,6 @@ PY
 verify_manifest "$STAGE/$PLUGIN_DIR"
 codesign --verify --deep --strict "$STAGE/$PLUGIN_DIR/NegativeCutter"
 
-( cd "$STAGE" && zip -qr "$OUTPUT_ZIP" install.sh "$PLUGIN_DIR" )
-mkdir -p "$EXTRACTED"
-unzip -q "$OUTPUT_ZIP" -d "$EXTRACTED"
-verify_manifest "$EXTRACTED/$PLUGIN_DIR"
-python3 - "$OUTPUT_ZIP" "$STAGE" <<'PY'
-import sys, zipfile
-from pathlib import Path
-archive, stage = map(Path, sys.argv[1:])
-expected = {'install.sh'} | {f'NegativeCutter-135.lrplugin/{p.relative_to(stage / "NegativeCutter-135.lrplugin").as_posix()}' for p in (stage / 'NegativeCutter-135.lrplugin').rglob('*') if p.is_file()}
-actual = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
-if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact release file set')
-if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
-PY
-
 smoke() {
   local plugin="$1" fixture="$2" frames="$3" format="$4" output
   output="$("$plugin/NegativeCutter/NegativeCutter" "$fixture" --frames "$frames" --format "$format" --original "$fixture")"
@@ -120,5 +115,21 @@ PY
 # inputs before a ZIP can survive this script: --frames 6 --format 35mm --original;
 # --frames 4 --format 645 --original.
 smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
+smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645
+( cd "$STAGE" && zip -qr "$OUTPUT_ZIP" install.sh "$PLUGIN_DIR" )
+mkdir -p "$EXTRACTED"
+unzip -q "$OUTPUT_ZIP" -d "$EXTRACTED"
+verify_manifest "$EXTRACTED/$PLUGIN_DIR"
+codesign --verify --deep --strict "$EXTRACTED/$PLUGIN_DIR/NegativeCutter"
+python3 - "$OUTPUT_ZIP" "$STAGE" <<'PY'
+import sys, zipfile
+from pathlib import Path
+archive, stage = map(Path, sys.argv[1:])
+expected = {'install.sh'} | {f'NegativeCutter-135.lrplugin/{p.relative_to(stage / "NegativeCutter-135.lrplugin").as_posix()}' for p in (stage / 'NegativeCutter-135.lrplugin').rglob('*') if p.is_file()}
+actual = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
+if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact release file set')
+if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
+PY
+smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_120" 4 645
 echo "Built $OUTPUT_ZIP"
