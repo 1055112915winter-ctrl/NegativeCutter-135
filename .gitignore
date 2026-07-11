@@ -34,6 +34,8 @@ README
 # Dev directories
 .claude/
 FilmCrop_Clean.lrplugin/
+docs/
+scripts/
 vendor-analysis/
 
 # Local one-off investigations (maintained docs/scripts are tracked)
@@ -68,7 +70,7 @@ release/
 marketing/
 
 # Local investigation workspace
-/test_files
+test_files/
 test_outputs/
 task_plan.md
 findings.md
