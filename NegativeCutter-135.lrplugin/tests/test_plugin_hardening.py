@@ -191,7 +191,7 @@ class PluginHardeningTests(unittest.TestCase):
     def test_release_gates_both_fixture_smokes_before_archive_and_after_extract(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         staged_120 = 'smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645'
-        archive = 'ditto -c -k --sequesterRsrc "$ARCHIVE_ROOT" "$OUTPUT_ZIP"'
+        archive = 'ditto -c -k --sequesterRsrc --keepParent install.sh "$PLUGIN_DIR" "$OUTPUT_ZIP"'
         extracted_135 = 'smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm'
         self.assertLess(source.index(staged_120), source.index(archive))
         self.assertLess(source.index(archive), source.index(extracted_135))
@@ -239,6 +239,11 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertIn("__MACOSX/", source)
         self.assertIn("AppleDouble", source)
         self.assertIn("unexpected ZIP top-level entry", source)
+
+    def test_ditto_archive_explicitly_packages_only_two_release_roots(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        self.assertIn('( cd "$ARCHIVE_ROOT" && ditto -c -k --sequesterRsrc --keepParent install.sh "$PLUGIN_DIR" "$OUTPUT_ZIP" )', source)
+        self.assertIn("actual payload entries", source)
 
     def test_api_module_imports_without_fastapi(self):
         code = f"""

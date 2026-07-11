@@ -134,7 +134,7 @@ ARCHIVE_ROOT="$STAGE/archive-root"
 mkdir "$ARCHIVE_ROOT"
 ditto "$STAGE/install.sh" "$ARCHIVE_ROOT/install.sh"
 ditto "$STAGE/$PLUGIN_DIR" "$ARCHIVE_ROOT/$PLUGIN_DIR"
-ditto -c -k --sequesterRsrc "$ARCHIVE_ROOT" "$OUTPUT_ZIP"
+( cd "$ARCHIVE_ROOT" && ditto -c -k --sequesterRsrc --keepParent install.sh "$PLUGIN_DIR" "$OUTPUT_ZIP" )
 mkdir -p "$EXTRACTED"
 ditto -x -k "$OUTPUT_ZIP" "$EXTRACTED"
 verify_manifest "$EXTRACTED/$PLUGIN_DIR"
@@ -148,7 +148,7 @@ names = {n for n in zipfile.ZipFile(archive).namelist() if not n.endswith('/')}
 # __MACOSX and AppleDouble (._*) are ditto metadata, not release payload.
 metadata = {n for n in names if n.startswith('__MACOSX/') or '/._' in n or n.startswith('._')}
 actual = names - metadata
-if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact release file set')
+if actual != expected: raise SystemExit('ERROR: ZIP does not contain the exact release file set; actual payload entries: ' + ', '.join(sorted(actual)))
 if any(not (n == 'install.sh' or n.startswith('NegativeCutter-135.lrplugin/')) for n in actual): raise SystemExit('ERROR: unexpected ZIP top-level entry')
 if any('/marketing/' in n or '/.claude/' in n or n.startswith('marketing/') or n.startswith('.claude/') for n in actual): raise SystemExit('ERROR: forbidden ZIP payload entry')
 PY
