@@ -8,6 +8,9 @@ local function clone(v) if type(v) ~= 'table' then return v end; local n={}; for
 local function now(clock) return (clock and clock.now and clock.now()) or (os.time() * 1000) end
 local function spawn(s, f) if s and s.spawn then return s.spawn(f) end; return f() end
 local function sleep(s, ms) if s and s.sleep then return s.sleep(ms) end end
+function PreviewAgent.makeAdapters(LrTasks, LrFileUtils)
+  return {scheduler={startAsyncTask=function(f) return LrTasks.startAsyncTask(f) end,spawn=function(f) return LrTasks.startAsyncTask(f) end,sleep=function(ms) return LrTasks.sleep(ms/1000) end},clock={now=function() return os.time()*1000 + math.floor((os.clock()%1)*1000) end},filesystem={mkdir=function(p) return LrFileUtils.createAllDirectories(p) end}}
+end
 
 function PreviewAgent.review(context, request, adapters)
   adapters = adapters or {}; local scheduler = adapters.scheduler or {}

@@ -9,6 +9,7 @@ local LrFileUtils = import 'LrFileUtils'
 local LrPathUtils = import 'LrPathUtils'
 local LrApplication = import 'LrApplication'
 local PreviewAgent = require 'PreviewAgent'
+local PreviewAdapters = PreviewAgent.makeAdapters(LrTasks, LrFileUtils)
 
 local logger = LrLogger('NegativeCutterInit')
 logger:enable("logfile")
