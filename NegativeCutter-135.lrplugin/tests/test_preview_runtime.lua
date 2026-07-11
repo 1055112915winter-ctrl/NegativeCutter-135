@@ -136,6 +136,21 @@ io.open, sdk.LrFileUtils.writeFile = originalIoOpen, originalWriteFile
 assert(sdkCompatibleId == sdkCompatibleDialog, "runtime requires nonexistent LrFileUtils.writeFile")
 assert(files[sdkCompatibleDir .. "/.negativecutter-preview-owner"] == Runtime.ownerMarker(session, sdkCompatibleDialog), "io fallback did not publish owner marker")
 
+-- LrFileUtils.readFile throws for a missing marker; stale markerless folders
+-- must not abort startup scavenging or prevent a new runtime from registering.
+local originalReadFile = sdk.LrFileUtils.readFile
+sdk.LrFileUtils.readFile = function(path)
+  if not files[path] then error("missing marker") end
+  return files[path]
+end
+local missingMarkerRuntime = Runtime.create(sdk, processAgent, {
+  previewRoot = "/missing-marker-root",
+  sessionId = session,
+})
+local missingMarkerOk = pcall(function() missingMarkerRuntime:initialize() end)
+sdk.LrFileUtils.readFile = originalReadFile
+assert(missingMarkerOk, "missing owner markers must not abort runtime initialization")
+
 -- Lightroom menu scripts can receive a fresh module environment even though
 -- Init.lua already ran. A menu entry must be able to recover a current runtime
 -- instead of depending on module-local state from plugin initialization.

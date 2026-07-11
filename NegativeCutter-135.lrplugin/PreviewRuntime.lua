@@ -137,9 +137,12 @@ function PreviewRuntime.create(sdk, processAgent, options)
     return true
   end
   local function readFile(path)
-    if fileUtils.readFile then return fileUtils.readFile(path) end
-    local handle = io.open(path, "rb")
-    if not handle then return nil end
+    if fileUtils.readFile then
+      local ok, content = pcall(function() return fileUtils.readFile(path) end)
+      return ok and content or nil
+    end
+    local opened, handle = pcall(io.open, path, "rb")
+    if not opened or not handle then return nil end
     local content = handle:read("*a")
     handle:close()
     return content

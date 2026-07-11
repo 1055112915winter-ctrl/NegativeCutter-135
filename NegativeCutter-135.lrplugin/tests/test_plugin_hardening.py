@@ -342,6 +342,11 @@ print(module.has_api())
         self.assertIn("isSystemFailure", source)
         self.assertIn("cp -RL", source)
 
+    def test_preview_render_cleanup_uses_lightroom_file_api(self):
+        source = (PLUGIN / "ProcessAgent.lua").read_text(encoding="utf-8")
+        self.assertNotIn("os.remove", source)
+        self.assertIn("LrFileUtils.delete", source)
+
     def test_release_menu_does_not_reference_test_scripts(self):
         info = (PLUGIN / "Info.lua").read_text(encoding="utf-8")
         self.assertNotIn('file = "tests/', info)

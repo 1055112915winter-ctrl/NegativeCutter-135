@@ -41,6 +41,12 @@ local function fileExists(path)
   return false
 end
 
+local function removeFile(path)
+  if type(path) ~= "string" or path == "" or not LrFileUtils.delete then return false end
+  local ok = pcall(function() LrFileUtils.delete(path) end)
+  return ok
+end
+
 local ProcessAgent = {}
 
 local function deepCopy(value)
@@ -531,7 +537,7 @@ function ProcessAgent.renderPreview(request)
   local framesFile, writeError = io.open(framesPath, "w")
   if not framesFile then return nil, "无法写入预览帧: " .. tostring(writeError) end
   local encodedOk, encoded = pcall(json.encode, { frames = deepCopy(request.frames) })
-  if not encodedOk then framesFile:close(); os.remove(framesPath); return nil, tostring(encoded) end
+  if not encodedOk then framesFile:close(); removeFile(framesPath); return nil, tostring(encoded) end
   framesFile:write(encoded); framesFile:close()
 
   local offsets = request.offsets or {}
@@ -544,7 +550,7 @@ function ProcessAgent.renderPreview(request)
   local resultFile = io.open(resultPath, "r")
   local output = resultFile and (resultFile:read("*a") or "") or ""
   if resultFile then resultFile:close() end
-  os.remove(framesPath); os.remove(resultPath)
+  removeFile(framesPath); removeFile(resultPath)
   local jsonLine = output:match("^([^\r\n]+)") or ""
   local decodedOk, payload = pcall(json.decode, jsonLine)
   if exitCode ~= 0 then
