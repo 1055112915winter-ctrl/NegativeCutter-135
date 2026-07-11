@@ -9,6 +9,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 for pattern in \
   test_auto_frame_detection.py \
   test_plugin_hardening.py \
+  test_live_crop_preview.py \
   test_preview_dialog_contract.py \
   test_recognition_ui_contract.py \
   test_medium_format_detection.py \
