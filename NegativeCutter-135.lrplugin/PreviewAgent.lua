@@ -3,6 +3,7 @@
 local PreviewAgent = {}
 local registry = {}
 local nextId = 0
+local function clone(v) if type(v) ~= 'table' then return v end; local n={}; for k,x in pairs(v) do n[k]=clone(x) end; return n end
 
 local function now(clock) return (clock and clock.now and clock.now()) or (os.time() * 1000) end
 local function spawn(s, f) if s and s.spawn then return s.spawn(f) end; return f() end
@@ -60,14 +61,14 @@ function PreviewAgent.review(context, request, adapters)
     if state.closed then return false end
     state.generation = state.generation + 1; local gen = state.generation; local deadline = now(clock) + 120
     state.deadline = deadline; state.pending=true; state.status="pending"
-    dialog._request=req; ensureWorker(); return gen
+    dialog._request=clone(req); ensureWorker(); return gen
   end
   function dialog:Reset()
     if state.closed then return false end
     state.topPx,state.bottomPx,state.leftPx,state.rightPx=0,0,0,0
     state.generation=state.generation+1; local gen=state.generation; local deadline=now(clock)+120
     state.deadline=deadline; state.pending=true; state.status="pending"
-    dialog._request={offsets={topPx=0,bottomPx=0,leftPx=0,rightPx=0}, source=request}; ensureWorker(); return true
+    dialog._request={offsets={topPx=0,bottomPx=0,leftPx=0,rightPx=0}, source=clone(request)}; ensureWorker(); return true
   end
   function dialog:Confirm()
     if state.closed or state.pending or state.status ~= "ready" then return false end
