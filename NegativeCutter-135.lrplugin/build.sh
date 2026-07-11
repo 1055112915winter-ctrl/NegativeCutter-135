@@ -34,6 +34,7 @@ done
 rm -rf build dist NegativeCutter
 rm -f "$OUTPUT_ZIP"
 python3 -m PyInstaller NegativeCutter.spec
+codesign --force --deep --sign - dist/NegativeCutter
 if [[ -d dist/NegativeCutter && -x dist/NegativeCutter/NegativeCutter ]]; then
   rm -rf NegativeCutter
   cp -RL dist/NegativeCutter NegativeCutter

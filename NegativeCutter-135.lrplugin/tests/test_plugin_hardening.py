@@ -176,6 +176,15 @@ class PluginHardeningTests(unittest.TestCase):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         self.assertIn("trap 'cleanup_failure; exit 1' INT TERM", source)
 
+    def test_build_ad_hoc_signs_fresh_pyinstaller_runtime_before_staging(self):
+        source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
+        build = "python3 -m PyInstaller NegativeCutter.spec"
+        sign = "codesign --force --deep --sign - dist/NegativeCutter"
+        stage = 'mkdir -p "$STAGE/$PLUGIN_DIR"'
+        self.assertIn(sign, source)
+        self.assertLess(source.index(build), source.index(sign))
+        self.assertLess(source.index(sign), source.index(stage))
+
     def test_api_module_imports_without_fastapi(self):
         code = f"""
 import importlib.abc
