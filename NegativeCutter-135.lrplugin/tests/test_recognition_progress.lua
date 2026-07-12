@@ -28,6 +28,7 @@ local Entry = realDofile(pluginDir .. "DetectFrames.lua")
 assert(type(Entry) == "table" and type(Entry.runRecognition) == "function", "recognition runner must be injectable")
 local BatchEntry = realDofile(pluginDir .. "BatchProcess.lua")
 assert(type(BatchEntry) == "table" and type(BatchEntry.runRecognition) == "function", "batch runner must be injectable")
+assert(type(BatchEntry.outcomePresentation) == "function", "batch outcome presentation must be testable")
 
 local function progress()
   local value = { doneCalls = 0, portions = {}, captions = {}, canceled = false }
@@ -91,6 +92,16 @@ do
   ProcessAgent.detectPhoto = function() error("unexpected boom") end
   local stats = Entry.runRecognition(catalog, photos, { previewMode = "none" }, {}, { progress = p })
   assert(type(stats.unexpectedError) == "string" and not stats.canceled and p.doneCalls == 1, "unexpected error finalization failed")
+end
+
+-- A batch with errors and zero successful copies is a failure, not partial completion.
+do
+  local title, body, severity = BatchEntry.outcomePresentation {
+    processedPhotos = 1, unprocessedPhotos = 0, created = 0,
+    errors = { "bad detection" }, canceled = false, partialCurrent = false,
+  }
+  assert(title == "NegativeCutter - 失败" and severity == "critical", "zero-success batch must be classified as failure")
+  assert(body:match("创建 0 个虚拟副本") and body:match("错误 1 个"), "failure summary counts changed")
 end
 
 print("recognition progress tests passed")

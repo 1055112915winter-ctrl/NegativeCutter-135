@@ -72,6 +72,21 @@ local function previewDetection(detection, runtime, title)
     sourceWidth = detection.sourceWidth, sourceHeight = detection.sourceHeight, title = title }, runtime)
 end
 
+local function outcomePresentation(stats)
+  local body = string.format("已处理 %d 个，未处理 %d 个，创建 %d 个虚拟副本，错误 %d 个",
+    stats.processedPhotos, stats.unprocessedPhotos, stats.created, #stats.errors)
+  if stats.unexpectedError then
+    return "NegativeCutter - 未预期错误", body .. "\n\n" .. stats.unexpectedError, "critical"
+  elseif stats.canceled then
+    return "NegativeCutter - 已取消", body .. (stats.partialCurrent and "\n当前照片已保留部分成功副本。" or ""), "info"
+  elseif #stats.errors > 0 and stats.created == 0 then
+    return "NegativeCutter - 失败", body, "critical"
+  elseif #stats.errors > 0 then
+    return "NegativeCutter - 部分完成", body, "warning"
+  end
+  return "NegativeCutter - 完成", body, "info"
+end
+
 local function runRecognition(catalog, photos, settings, runtime, adapters)
   adapters = adapters or {}
   local progress = assert(adapters.progress, "progress adapter is required")
@@ -162,12 +177,8 @@ LrTasks.startAsyncTask(function()
   local progress = LrProgressScope { title = "NegativeCutter - 批量处理", caption = "准备处理" }
   progress:setCancelable(true)
   local stats = runRecognition(catalog, photos, settings, runtime, { progress = progress })
-  local body = string.format("已处理 %d 个，未处理 %d 个，创建 %d 个虚拟副本，错误 %d 个",
-    stats.processedPhotos, stats.unprocessedPhotos, stats.created, #stats.errors)
-  if stats.unexpectedError then LrDialogs.message("NegativeCutter - 未预期错误", body .. "\n\n" .. stats.unexpectedError, "critical")
-  elseif stats.canceled then LrDialogs.message("NegativeCutter - 已取消", body .. (stats.partialCurrent and "\n当前照片已保留部分成功副本。" or ""), "info")
-  elseif #stats.errors > 0 then LrDialogs.message("NegativeCutter - 部分完成", body, "warning")
-  else LrDialogs.message("NegativeCutter - 完成", body, "info") end
+  local title, body, severity = outcomePresentation(stats)
+  LrDialogs.message(title, body, severity)
 end)
 
-return { runRecognition = runRecognition }
+return { runRecognition = runRecognition, outcomePresentation = outcomePresentation }
