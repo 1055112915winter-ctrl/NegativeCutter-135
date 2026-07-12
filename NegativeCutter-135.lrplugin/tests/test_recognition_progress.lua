@@ -10,6 +10,7 @@ _G.import = function(name)
   if name == "LrPrefs" then return { prefsForPlugin = function() return {} end } end
   if name == "LrTasks" then return { startAsyncTask = function(fn) asyncBody = fn end, pcall = pcall } end
   if name == "LrApplication" or name == "LrDialogs" or name == "LrView" or name == "LrProgressScope" then return {} end
+  if name == "LrBinding" or name == "LrFunctionContext" then return {} end
   error("unexpected import " .. tostring(name))
 end
 _G.dofile = function(path)

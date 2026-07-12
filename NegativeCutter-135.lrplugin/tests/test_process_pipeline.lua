@@ -26,7 +26,7 @@ _G.import = function(name)
       delete = function(path) os.remove(path); return true end,
     }
   elseif name == "LrTasks" then
-    return { sleep = function() end, execute = function(command) return executeImpl(command) end }
+    return { sleep = function() end, execute = function(command) return executeImpl(command) end, pcall = pcall }
   elseif name == "LrPrefs" then
     return { prefsForPlugin = function() return { filmType = "negative" } end }
   end
@@ -69,7 +69,8 @@ end
 
 -- Pure adjustment is deep, relative-coordinate canonical, Python-parity, and single-use.
 do
-  local detection = { sourceWidth = 100, sourceHeight = 60, frames = {{ index = 1,
+  local photo = { sdkIdentity = "opaque" }
+  local detection = { photo = photo, sourceWidth = 100, sourceHeight = 60, frames = {{ index = 1,
     relativeTop = 0.1, relativeBottom = 0.9, relativeLeft = 0.2, relativeRight = 0.8,
     extra = { keep = true } }} }
   local adjusted, err = ProcessAgent.adjustDetection(detection, { topPx = 10, bottomPx = 20, leftPx = -30, rightPx = 40 })
@@ -78,6 +79,7 @@ do
   assert(frame.top == 0 and frame.bottom == 60 and frame.left == 50 and frame.right == 100, "adjustDetection pixel parity failed")
   assert(frame.relativeTop == 0 and frame.relativeBottom == 1 and frame.relativeLeft == 0.5 and frame.relativeRight == 1, "adjustDetection relative parity failed")
   assert(detection.frames[1].relativeTop == 0.1 and adjusted.frames[1].extra ~= detection.frames[1].extra, "adjustDetection mutated input")
+  assert(adjusted.photo == photo, "adjustDetection must preserve the opaque Lightroom photo identity")
   assert(ProcessAgent.adjustDetection(adjusted, { topPx = 1 }) == nil, "double adjustment must be rejected")
 end
 
@@ -125,13 +127,21 @@ end
 
 -- Copy creation checks cancellation per frame and reports crop failure without stopping later frames.
 do
-  local copyIndex, copies = 0, {}
+  local copyIndex, copies, writeDepth = 0, {}, 0
   local catalog = {
-    setSelectedPhotos = function() end,
-    withWriteAccessDo = function(_, _, fn) fn({}) end,
+    setSelectedPhotos = function(_, activePhoto, selectedPhotos)
+      assert(selectedPhotos[1] == activePhoto, "active photo must be included in Lightroom's selected-photo array")
+    end,
+    withWriteAccessDo = function(_, _, fn)
+      writeDepth = writeDepth + 1
+      fn({})
+      writeDepth = writeDepth - 1
+    end,
     createVirtualCopies = function()
       copyIndex = copyIndex + 1
-      local copy = { setRawMetadata = function() end }; copies[#copies + 1] = copy; return { copy }
+      local copy = { setRawMetadata = function()
+        assert(writeDepth > 0, "copy rename must run inside catalog write access")
+      end }; copies[#copies + 1] = copy; return { copy }
     end,
   }
   applier.applyCrop = function(_, crop) if crop.top > 0.2 then return false, "crop rejected" end; return true end
@@ -139,12 +149,15 @@ do
     frames = {{ relativeTop = 0.1, relativeBottom = 0.4, relativeLeft = 0.1, relativeRight = 0.4 },
               { relativeTop = 0.3, relativeBottom = 0.7, relativeLeft = 0.2, relativeRight = 0.8 }} }
   local summary = ProcessAgent.createVirtualCopies(catalog, detection, {})
-  assert(summary.status == "partial_failure" and summary.attemptedFrames == 2 and summary.createdCount == 1 and #summary.errors == 1, "copy failure accounting mismatch")
+  assert(summary.status == "partial_failure" and summary.attemptedFrames == 2 and summary.createdCount == 1
+    and #summary.errors == 1 and #summary.warnings == 0, "copy failure accounting mismatch")
   local canceled = ProcessAgent.createVirtualCopies(catalog, detection, { isCanceled = function() return true end })
   assert(canceled.status == "canceled" and canceled.attemptedFrames == 0 and canceled.createdCount == 0, "pre-frame cancellation mismatch")
 
   local renameCatalog = {
-    setSelectedPhotos = function() end,
+    setSelectedPhotos = function(_, activePhoto, selectedPhotos)
+      assert(selectedPhotos[1] == activePhoto, "active copy must be included in Lightroom's selected-photo array")
+    end,
     withWriteAccessDo = function(_, _, fn) fn({}) end,
     createVirtualCopies = function()
       return { { setRawMetadata = function() error("copy name locked") end } }

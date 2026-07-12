@@ -9,6 +9,43 @@ class RecognitionUIContractTests(unittest.TestCase):
     def setUp(self):
         self.detect = (PLUGIN / "DetectFrames.lua").read_text(encoding="utf-8")
         self.batch = (PLUGIN / "BatchProcess.lua").read_text(encoding="utf-8")
+        self.process = (PLUGIN / "ProcessAgent.lua").read_text(encoding="utf-8")
+
+    def test_format_defaults_are_not_one_global_six_frame_value(self):
+        for source in (self.detect, self.batch):
+            self.assertIn("ProcessAgent.defaultExpectedFrames", source)
+            self.assertIn("LrBinding.makePropertyTable", source)
+            self.assertIn("LrFunctionContext.callWithContext", source)
+        for format_hint, expected in (("35mm", 6), ("645", 4), ("6x6", 3), ("6x7", 3), ("6x8", 2), ("6x9", 2)):
+            self.assertIn('["%s"] = %d' % (format_hint, expected), self.process)
+        self.assertIn('formatHint or "35mm"', self.process)
+
+    def test_recognition_dialogs_start_auto_and_do_not_persist_format_state(self):
+        for source in (self.detect, self.batch):
+            self.assertIn('local initialFormatIndex = 1', source)
+            self.assertIn('local initialFormatHint = ""', source)
+            self.assertIn('local initialExpectedFrames = ProcessAgent.defaultExpectedFrames("")', source)
+            self.assertNotIn('local savedFormatHint = prefs.filmFormat', source)
+            self.assertNotIn('prefs.expectedFramesFormat', source)
+            self.assertNotIn('prefs.expectedFrames then', source)
+            self.assertNotIn('prefs.filmFormat,', source)
+            self.assertNotIn('prefs.expectedFrames,', source)
+        self.assertIn('prefs.previewModeDetect', self.detect)
+        self.assertIn('prefs.previewModeBatch', self.batch)
+
+    def test_format_observer_keeps_auto_and_4x5_fallback_defaults(self):
+        for source in (self.detect, self.batch):
+            self.assertIn('selectedFormatHint(dialogData.formatIndex)', source)
+            self.assertIn('ProcessAgent.defaultExpectedFrames(selectedFormatHint(dialogData.formatIndex))', source)
+            self.assertIn('{ value = "", display = "自动检测" }', source)
+            self.assertIn('{ value = "4x5", display = "大画幅 4×5" }', source)
+
+    def test_batch_copy_selection_and_orientation_reads_are_yield_safe(self):
+        self.assertIn('LrTasks.pcall(function()', self.process)
+        self.assertIn('catalog:setSelectedPhotos(detection.photo, { detection.photo })', self.process)
+        self.assertIn('catalog:setSelectedPhotos(virtualCopy, { virtualCopy })', self.process)
+        self.assertIn('local renamed, renameError = LrTasks.pcall(function()', self.process)
+        self.assertNotIn('local renamed, renameError = pcall(function()', self.process)
 
     def test_both_entries_offer_three_preview_modes_with_independent_defaults(self):
         for source in (self.detect, self.batch):

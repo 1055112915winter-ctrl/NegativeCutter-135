@@ -1,6 +1,8 @@
 -- Detect Frames recognition entry with optional live preview.
 local LrApplication = import 'LrApplication'
+local LrBinding = import 'LrBinding'
 local LrDialogs = import 'LrDialogs'
+local LrFunctionContext = import 'LrFunctionContext'
 local LrLogger = import 'LrLogger'
 local LrPathUtils = import 'LrPathUtils'
 local LrPrefs = import 'LrPrefs'
@@ -38,40 +40,51 @@ local function menuItems(options)
   return items
 end
 
+local function selectedFormatHint(formatIndex)
+  return FORMAT_OPTIONS[formatIndex] and FORMAT_OPTIONS[formatIndex].value or ""
+end
+
 local function chooseSettings(photoCount)
-  local f, bind = LrView.osFactory(), LrView.bind
-  local filmTypes = CropCleaner.availableTypes()
-  local dialogData = {
-    expectedFrames = prefs.expectedFrames or 6,
-    formatIndex = optionIndex(FORMAT_OPTIONS, prefs.filmFormat or ""),
-    filmTypeIndex = optionIndex(filmTypes, prefs.filmType or "negative"),
-    previewModeIndex = optionIndex(PREVIEW_MODES, prefs.previewModeDetect or "per_photo"),
-  }
-  local result = LrDialogs.presentModalDialog {
-    title = "NegativeCutter - 开始检测", actionVerb = "开始检测", cancelVerb = "取消",
-    contents = f:column {
-      bind_to_object = dialogData, spacing = f:control_spacing(),
-      f:static_text { title = string.format("将处理 %d 个胶片扫描文件", photoCount) },
-      f:row { f:static_text { title = "预期帧数:", width = 90 },
-        f:edit_field { value = bind "expectedFrames", width_in_chars = 6, precision = 0 } },
-      f:row { f:static_text { title = "胶片格式:", width = 90 },
-        f:popup_menu { value = bind "formatIndex", items = menuItems(FORMAT_OPTIONS), width_in_chars = 16 } },
-      f:row { f:static_text { title = "胶片类型:", width = 90 },
-        f:popup_menu { value = bind "filmTypeIndex", items = menuItems(filmTypes), width_in_chars = 16 } },
-      f:row { f:static_text { title = "预览方式:", width = 90 },
-        f:popup_menu { value = bind "previewModeIndex", items = menuItems(PREVIEW_MODES), width_in_chars = 16 } },
-    },
-  }
-  if result ~= "ok" then return nil end
-  local settings = {
-    expectedFrames = tonumber(dialogData.expectedFrames) or 6,
-    formatHint = FORMAT_OPTIONS[dialogData.formatIndex].value,
-    filmType = filmTypes[dialogData.filmTypeIndex].value,
-    previewMode = PREVIEW_MODES[dialogData.previewModeIndex].value,
-  }
-  if settings.formatHint == "" then settings.formatHint = nil end
-  prefs.filmFormat, prefs.filmType, prefs.previewModeDetect = settings.formatHint or "", settings.filmType, settings.previewMode
-  return settings
+  return LrFunctionContext.callWithContext("NegativeCutter.DetectFrames.chooseSettings", function(context)
+    local f, bind = LrView.osFactory(), LrView.bind
+    local filmTypes = CropCleaner.availableTypes()
+    local initialFormatIndex = 1
+    local initialFormatHint = ""
+    local initialExpectedFrames = ProcessAgent.defaultExpectedFrames("")
+    local dialogData = LrBinding.makePropertyTable(context)
+    dialogData.expectedFrames = initialExpectedFrames
+    dialogData.formatIndex = initialFormatIndex
+    dialogData.filmTypeIndex = optionIndex(filmTypes, prefs.filmType or "negative")
+    dialogData.previewModeIndex = optionIndex(PREVIEW_MODES, prefs.previewModeDetect or "per_photo")
+    dialogData:addObserver("formatIndex", function()
+      dialogData.expectedFrames = ProcessAgent.defaultExpectedFrames(selectedFormatHint(dialogData.formatIndex))
+    end)
+    local result = LrDialogs.presentModalDialog {
+      title = "NegativeCutter - 开始检测", actionVerb = "开始检测", cancelVerb = "取消",
+      contents = f:column {
+        bind_to_object = dialogData, spacing = f:control_spacing(),
+        f:static_text { title = string.format("将处理 %d 个胶片扫描文件", photoCount) },
+        f:row { f:static_text { title = "预期帧数:", width = 90 },
+          f:edit_field { value = bind "expectedFrames", width_in_chars = 6, precision = 0 } },
+        f:row { f:static_text { title = "胶片格式:", width = 90 },
+          f:popup_menu { value = bind "formatIndex", items = menuItems(FORMAT_OPTIONS), width_in_chars = 16 } },
+        f:row { f:static_text { title = "胶片类型:", width = 90 },
+          f:popup_menu { value = bind "filmTypeIndex", items = menuItems(filmTypes), width_in_chars = 16 } },
+        f:row { f:static_text { title = "预览方式:", width = 90 },
+          f:popup_menu { value = bind "previewModeIndex", items = menuItems(PREVIEW_MODES), width_in_chars = 16 } },
+      },
+    }
+    if result ~= "ok" then return nil end
+    local settings = {
+      expectedFrames = tonumber(dialogData.expectedFrames) or ProcessAgent.defaultExpectedFrames(selectedFormatHint(dialogData.formatIndex)),
+      formatHint = selectedFormatHint(dialogData.formatIndex),
+      filmType = filmTypes[dialogData.filmTypeIndex].value,
+      previewMode = PREVIEW_MODES[dialogData.previewModeIndex].value,
+    }
+    if settings.formatHint == "" then settings.formatHint = nil end
+    prefs.filmType, prefs.previewModeDetect = settings.filmType, settings.previewMode
+    return settings
+  end)
 end
 
 local function previewDetection(detection, runtime, title)

@@ -49,6 +49,22 @@ end
 
 local ProcessAgent = {}
 
+-- The recognition hint is a format-specific default.  Keep this in the
+-- shared process boundary so menu dialogs and legacy callers cannot drift
+-- back to one global six-frame value.
+local DEFAULT_EXPECTED_FRAMES = {
+  ["35mm"] = 6,
+  ["645"] = 4,
+  ["6x6"] = 3,
+  ["6x7"] = 3,
+  ["6x8"] = 2,
+  ["6x9"] = 2,
+}
+
+function ProcessAgent.defaultExpectedFrames(formatHint)
+  return DEFAULT_EXPECTED_FRAMES[formatHint or "35mm"] or 6
+end
+
 local function deepCopy(value)
   if type(value) ~= "table" then return value end
   local copy = {}
@@ -402,7 +418,7 @@ function ProcessAgent.directionAlign(result, photo)
 
   -- Attempt to read Lightroom's orientation string (AB/BC/CD/DA).
   -- When present, this gives an unambiguous rotation direction.
-  local ok, lrOrientation = pcall(function()
+  local ok, lrOrientation = LrTasks.pcall(function()
     return photo:getRawMetadata("orientation")
   end)
   lrOrientation = (ok and type(lrOrientation) == "string") and lrOrientation or nil
@@ -593,7 +609,11 @@ function ProcessAgent.detectPhoto(photo, options)
   end
   local dimensions = photo:getRawMetadata("dimensions") or {}
   onStage("recognition")
-  local result, recognitionError = ProcessAgent.analyzeWithPython(thumbnailPath, options.expectedFrames or prefs.expectedFrames or 6,
+  local expectedFrames = options.expectedFrames
+  if expectedFrames == nil then
+    expectedFrames = ProcessAgent.defaultExpectedFrames(options.formatHint)
+  end
+  local result, recognitionError = ProcessAgent.analyzeWithPython(thumbnailPath, expectedFrames,
     originalPath, options.formatHint, dimensions.width, dimensions.height)
   if not result or type(result.frames) ~= "table" or #result.frames == 0 then
     return nil, "分析失败 - " .. tostring(recognitionError or "未检测到帧")
@@ -620,6 +640,9 @@ function ProcessAgent.adjustDetection(detection, offsets)
   if not width or width <= 0 or not height or height <= 0 then return nil, "invalid detection dimensions" end
   offsets = offsets or {}
   local adjusted = deepCopy(detection)
+  -- LrPhoto is an opaque SDK object. Preserve its identity while deep-copying
+  -- the mutable detection payload (especially frames) for one-time adjustment.
+  adjusted.photo = detection.photo
   adjusted._previewAdjusted = true
   for _, frame in ipairs(adjusted.frames) do
     local top = finiteNumber(frame.relativeTop, 0) * height - finiteNumber(offsets.topPx)
@@ -671,8 +694,10 @@ function ProcessAgent.createVirtualCopies(catalog, detection, options)
       else
         summary.createdCount = summary.createdCount + 1
       end
-      local renamed, renameError = pcall(function()
-        virtualCopy:setRawMetadata("copyName", string.format("%s_帧%02d", baseName, frameIndex))
+      local renamed, renameError = LrTasks.pcall(function()
+        catalog:withWriteAccessDo("重命名虚拟副本", function()
+          virtualCopy:setRawMetadata("copyName", string.format("%s_帧%02d", baseName, frameIndex))
+        end)
       end)
       if not renamed then
         -- Lightroom can reject copy-name metadata on catalogs with restricted

@@ -15,7 +15,7 @@ _G.import = function(name)
     elseif name == "LrFileUtils" then
         return {exists = function() return false end, createAllDirectories = function() end}
     elseif name == "LrTasks" then
-        return {sleep = function() end, execute = function() return 0 end}
+        return {sleep = function() end, execute = function() return 0 end, pcall = pcall}
     elseif name == "LrPrefs" then
         return {prefsForPlugin = function() return {} end}
     end
