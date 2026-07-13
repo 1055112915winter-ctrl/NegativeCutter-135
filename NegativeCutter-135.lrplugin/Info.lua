@@ -3,7 +3,7 @@
   Lightroom 135 胶片扫描自动裁剪插件
 
   功能: 自动识别长条扫描胶片中的单帧，并创建虚拟副本
-  版本: 2.4.5
+  版本: 2.5.0
 ]]--
 
 return {
@@ -61,7 +61,7 @@ return {
 
   VERSION = {
     major = 2,
-    minor = 4,
-    revision = 5,
+    minor = 5,
+    revision = 0,
   },
 }

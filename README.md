@@ -36,7 +36,7 @@
 
 ### 一键安装（推荐）
 
-1. 从 [Releases](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases) 下载最新版 `NegativeCutter-135-v2.4.3.zip`
+1. 从 [Releases](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases) 下载最新版 `NegativeCutter-135-v2.5.0.zip`
 2. 解压 ZIP 文件
 3. 双击运行 `install.sh`
 4. 脚本会自动检测 Lightroom 插件目录并安装
