@@ -60,6 +60,31 @@ do
   assert(p.doneCalls == 1 and not stats.canceled and not stats.unexpectedError, "success finalization failed")
 end
 
+-- An initial detection failure is terminal for that photo but must not stop a later success.
+do
+  local p = progress(); local calls = {}
+  local orderedPhotos = {{ name = "bad-first" }, { name = "good-second" }}
+  ProcessAgent.detectPhoto = function(photo, options)
+    calls[#calls + 1] = photo.name
+    if photo.name == "bad-first" then return nil, "stable detection failure" end
+    options.onStage("thumbnail"); options.onStage("recognition")
+    return { photo = photo, fileName = photo.name, thumbnailPath = "/thumb.jpg", sourceWidth = 100, sourceHeight = 60, frames = {{}} }
+  end
+  ProcessAgent.createVirtualCopies = function(_, _, options)
+    options.onStage("frame", 1, 1)
+    return { status = "success", createdCount = 1, attemptedFrames = 1, errors = {} }
+  end
+  local stats = BatchEntry.runRecognition(catalog, orderedPhotos, { previewMode = "none" }, {}, { progress = p })
+  assert(calls[1] == "bad-first" and calls[2] == "good-second", "later photo was not attempted after initial failure")
+  assert(stats.processedPhotos == 2 and stats.unprocessedPhotos == 0 and stats.created == 1 and #stats.errors == 1,
+    "failure-then-success accounting mismatch")
+  assert(#p.portions == 2 and p.portions[1][1] == 1 and p.portions[2][1] == 2 and p.portions[2][2] == 2,
+    "failure-then-success denominator changed")
+  assert(p.doneCalls == 1 and not stats.canceled and not stats.unexpectedError, "failure-then-success finalization failed")
+  local title, _, severity = BatchEntry.outcomePresentation(stats)
+  assert(title == "NegativeCutter - 部分完成" and severity == "warning", "mixed outcome classification changed")
+end
+
 -- A click during synchronous recognition takes effect immediately after recognition returns.
 do
   local p = progress(); local copies = 0
