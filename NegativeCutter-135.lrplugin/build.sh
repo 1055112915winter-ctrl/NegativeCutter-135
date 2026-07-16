@@ -27,7 +27,7 @@ rm -rf build dist NegativeCutter
 rm -rf __pycache__
 # Classify every source-tree component before touching build output.  Release
 # inclusion is intentionally narrower than this source inventory.
-SOURCE_ALLOWLIST=(.gitignore ApplierAgent.lua BatchProcess.lua CropCleaner.lua DetectFrames.lua Feedback.lua INSTALL.md ImportAgent.lua Info.lua Init.lua LICENSE NegativeCutter NegativeCutter.spec PluginInfoProvider.lua PreviewAgent.lua PreviewRuntime.lua ProcessAgent.lua README.md Shutdown.lua Sponsor.lua THIRD-PARTY-LICENSES.md ThumbnailAgent.lua build.sh detect_thumb.py filmcrop install.sh json.lua tests)
+SOURCE_ALLOWLIST=(.gitignore ApplierAgent.lua BatchProcess.lua CLAUDE.md CropCleaner.lua DetectFrames.lua Feedback.lua INSTALL.md ImportAgent.lua Info.lua Init.lua LICENSE NegativeCutter NegativeCutter.spec PluginInfoProvider.lua PreviewAgent.lua PreviewRuntime.lua ProcessAgent.lua README.md RecognitionWorkflow.lua Shutdown.lua Sponsor.lua THIRD-PARTY-LICENSES.md ThumbnailAgent.lua build.sh debug_visualize.py detect_thumb.py filmcrop install.sh json.lua sponsor.jpg tests)
 for source_item in "$SCRIPT_DIR"/* "$SCRIPT_DIR"/.[!.]*; do
   source_name="$(basename "$source_item")"
   [[ "$source_name" == . || "$source_name" == .. ]] && continue
@@ -51,6 +51,7 @@ mkdir -p "$STAGE/$PLUGIN_DIR"
 ALLOWLIST=(
   ApplierAgent.lua BatchProcess.lua CropCleaner.lua DetectFrames.lua Feedback.lua
   ImportAgent.lua Info.lua Init.lua PluginInfoProvider.lua PreviewAgent.lua PreviewRuntime.lua ProcessAgent.lua
+  RecognitionWorkflow.lua
   Shutdown.lua Sponsor.lua ThumbnailAgent.lua json.lua LICENSE README.md INSTALL.md
   THIRD-PARTY-LICENSES.md detect_thumb.py filmcrop NegativeCutter
 )

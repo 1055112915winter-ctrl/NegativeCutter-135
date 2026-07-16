@@ -20,6 +20,10 @@ Lightroom Lua ──┘
   add detector policy to either adapter.
 - APP GUI/export code stays under `APP/filmcrop`.
 - Lightroom metadata, virtual copies, and develop settings stay in Lua.
+- `NegativeCutter-135.lrplugin/RecognitionWorkflow.lua` owns the shared
+  settings, preview-mode, progress, cancellation, and outcome flow used by
+  Detect Frames and Batch Process. The two menu files remain thin entry
+  adapters that provide their titles, preference keys, and defaults.
 
 ## Compatibility boundary
 
@@ -27,6 +31,10 @@ Callers continue to import `filmcrop.detector`. The adapter aliases that module
 to `negativecutter_core.detector`, including private helpers used by existing
 tests and `unittest.patch`. PyInstaller specs explicitly include `src` and all
 core modules.
+
+Lightroom entry modules load shared Lua code with `dofile()` from the plugin
+root and use SDK 5/6-era APIs. This preserves the existing Lightroom Classic
+10+ loading boundary without requiring newer module registration behavior.
 
 ## Change rule
 

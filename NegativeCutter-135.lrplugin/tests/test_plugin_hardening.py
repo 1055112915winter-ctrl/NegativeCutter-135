@@ -216,10 +216,15 @@ class PluginHardeningTests(unittest.TestCase):
         self.assertLess(source.index(archive), source.index(extracted_135))
         self.assertGreaterEqual(source.count("codesign --verify --deep --strict"), 2)
         self.assertIn("SOURCE_ALLOWLIST", source)
+        source_allowlist = source.split("SOURCE_ALLOWLIST=(", 1)[1].split(")", 1)[0]
+        release_allowlist = source.split("\nALLOWLIST=(", 1)[1].split(")", 1)[0]
+        for development_only in ("CLAUDE.md", "debug_visualize.py", "sponsor.jpg"):
+            self.assertIn(development_only, source_allowlist)
+            self.assertNotIn(development_only, release_allowlist)
 
     def test_release_includes_preview_runtime_and_gates_render_artifacts(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
-        for runtime_file in ("PreviewAgent.lua", "PreviewRuntime.lua"):
+        for runtime_file in ("PreviewAgent.lua", "PreviewRuntime.lua", "RecognitionWorkflow.lua"):
             self.assertGreaterEqual(source.count(runtime_file), 2)
         for required in (
             "render_smoke",

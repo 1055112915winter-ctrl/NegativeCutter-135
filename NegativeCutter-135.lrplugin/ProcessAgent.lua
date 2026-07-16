@@ -243,25 +243,8 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     end
   end
 
-  -- 安全地转义 POSIX sh 参数：在双引号内处理反斜杠、双引号、美元符、反引号、换行
-  local function shellEscape(s)
-    if type(s) ~= "string" then
-      return '""'
-    end
-    -- Lua 模式匹配中 $ 是特殊字符（字符串末尾锚点），匹配字面 $ 必须用 %$。
-    -- 原 :gsub('$', '\\$') 会在所有字符串末尾插入 \\$，导致路径末尾多出一个 $，
-    -- 在 shell 中执行时提示 "No such file or directory"（退出码 127 / 32512）。
-    return '"' .. s
-      :gsub('\\', '\\\\')
-      :gsub('"', '\\"')
-      :gsub('%$', '\\$')
-      :gsub('`', '\\`')
-      :gsub('\n', '\\n')
-      .. '"'
-  end
-
   -- 直接在插件目录内执行 PyInstaller onedir 可执行文件。
-  -- shellEscape 已修复（Lua 模式 %$ 匹配字面 $），中文/空格路径可安全传递。
+  -- 文件级 shellEscape 使用 Lua 模式 %$ 匹配字面 $，中文/空格路径可安全传递。
   -- 不再复制到临时目录：逐文件 LrFileUtils.copy 对 Mach-O/.dylib 等文件不可靠。
   local exePath = localExePath
   logger:trace("使用插件目录引擎: " .. exePath)
