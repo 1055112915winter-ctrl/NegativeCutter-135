@@ -60,9 +60,9 @@ contract alone could not close.
 
 - Artifact: `release/NegativeCutter-135-v2.5.0.zip`
 - SHA-256:
-  `fd6c5b2a523b785efad3f6a76b69aaf39a4afb4c2aef83c391c896808f2b1790`
+  `1688d18f7da22f21961f15913378dac573e7fe5f49eb9ff613d5d0ee1de5be28`
 - The extracted package is arm64, passes `codesign --verify --deep --strict`,
-  has 174 manifest lines and exactly 174 payload files/links, and contains no
+  has 183 manifest lines and exactly 183 payload files/links, and contains no
   tests, preview state, bytecode, `marketing/`, or `.claude/` content.
 
 ## Final installed-package acceptance
@@ -71,7 +71,7 @@ On 2026-07-16, Lightroom Classic was quit, and the exact ZIP above was
 extracted and installed with its top-level rollback-safe `install.sh` into
 `~/Library/Application Support/Adobe/Lightroom/Modules`.
 
-- The installed package's 174 payload entries match its manifest and
+- The installed package's 183 payload entries match its manifest and
   `codesign --verify --deep --strict` passes.
 - `zip-installed-plugin-manager.jpeg` records the restarted Lightroom plugin
   manager showing version 2.5.0, the bundled `NegativeCutter` engine, and the
@@ -80,6 +80,14 @@ extracted and installed with its top-level rollback-safe `install.sh` into
   `ef30253883543565c670243a020e1dfff13b036efa8415e270b5e2f396708780`.
 - The installed engine directly processed the real `52191.tif` fixture with
   six frames, `needsReview=false`, and `cropAngle=0.0`.
+- The final candidate was rebuilt and reinstalled after changing Auto format
+  to use automatic frame count (`0`). The installed `ProcessAgent.lua` has
+  SHA-256 `4b68be87c7fe0c997dac648f42563757cae68f31fd2510c8377925db1f6ee5df`;
+  both installed recognition entries contain the visible `0=自动` label.
+- The exact installed engine was then run with `--frames 0` and no explicit
+  format hint against real fixtures: `52191.tif` automatically returned six
+  safe 135 frames, while `Untitled (3).tif` automatically returned four safe
+  120 frames through the `auto_geometry` route.
 - A fresh local HTTP rerun passed `/health` and `/analyze` (both HTTP 200;
   six frames and `needsReview=false`), and the standalone APP completed its
   offscreen launch smoke. The APP is verification-only and remains outside

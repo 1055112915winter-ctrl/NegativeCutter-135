@@ -11,14 +11,23 @@ class RecognitionUIContractTests(unittest.TestCase):
         self.batch = (PLUGIN / "BatchProcess.lua").read_text(encoding="utf-8")
         self.process = (PLUGIN / "ProcessAgent.lua").read_text(encoding="utf-8")
 
-    def test_format_defaults_are_not_one_global_six_frame_value(self):
+    def test_auto_uses_auto_frame_count_and_explicit_formats_use_defaults(self):
         for source in (self.detect, self.batch):
             self.assertIn("ProcessAgent.defaultExpectedFrames", source)
             self.assertIn("LrBinding.makePropertyTable", source)
             self.assertIn("LrFunctionContext.callWithContext", source)
-        for format_hint, expected in (("35mm", 6), ("645", 4), ("6x6", 3), ("6x7", 3), ("6x8", 2), ("6x9", 2)):
+            self.assertIn("预期帧数（0=自动）:", source)
+        for format_hint, expected in (
+            ("", 0),
+            ("35mm", 6),
+            ("645", 4),
+            ("6x6", 3),
+            ("6x7", 3),
+            ("6x8", 2),
+            ("6x9", 2),
+        ):
             self.assertIn('["%s"] = %d' % (format_hint, expected), self.process)
-        self.assertIn('formatHint or "35mm"', self.process)
+        self.assertIn("DEFAULT_EXPECTED_FRAMES[formatHint or \"\"]", self.process)
 
     def test_recognition_dialogs_start_auto_and_do_not_persist_format_state(self):
         for source in (self.detect, self.batch):

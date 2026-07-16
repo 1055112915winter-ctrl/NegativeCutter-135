@@ -53,6 +53,7 @@ local ProcessAgent = {}
 -- shared process boundary so menu dialogs and legacy callers cannot drift
 -- back to one global six-frame value.
 local DEFAULT_EXPECTED_FRAMES = {
+  [""] = 0,
   ["35mm"] = 6,
   ["645"] = 4,
   ["6x6"] = 3,
@@ -62,7 +63,7 @@ local DEFAULT_EXPECTED_FRAMES = {
 }
 
 function ProcessAgent.defaultExpectedFrames(formatHint)
-  return DEFAULT_EXPECTED_FRAMES[formatHint or "35mm"] or 6
+  return DEFAULT_EXPECTED_FRAMES[formatHint or ""] or 6
 end
 
 local function deepCopy(value)

@@ -51,7 +51,7 @@ local function chooseSettings(photoCount)
       title = "NegativeCutter - 批量处理", actionVerb = "开始批量处理", cancelVerb = "取消",
       contents = f:column { bind_to_object = dialogData, spacing = f:control_spacing(),
         f:static_text { title = string.format("将批量处理 %d 个胶片扫描文件", photoCount) },
-        f:row { f:static_text { title = "预期帧数:", width = 90 }, f:edit_field { value = bind "expectedFrames", width_in_chars = 6, precision = 0 } },
+        f:row { f:static_text { title = "预期帧数（0=自动）:", width = 145 }, f:edit_field { value = bind "expectedFrames", width_in_chars = 6, precision = 0 } },
         f:row { f:static_text { title = "胶片格式:", width = 90 }, f:popup_menu { value = bind "formatIndex", items = menuItems(FORMAT_OPTIONS), width_in_chars = 16 } },
         f:row { f:static_text { title = "胶片类型:", width = 90 }, f:popup_menu { value = bind "filmTypeIndex", items = menuItems(filmTypes), width_in_chars = 16 } },
         f:row { f:static_text { title = "预览方式:", width = 90 }, f:popup_menu { value = bind "previewModeIndex", items = menuItems(PREVIEW_MODES), width_in_chars = 16 } },

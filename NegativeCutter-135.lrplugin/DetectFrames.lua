@@ -64,7 +64,7 @@ local function chooseSettings(photoCount)
       contents = f:column {
         bind_to_object = dialogData, spacing = f:control_spacing(),
         f:static_text { title = string.format("将处理 %d 个胶片扫描文件", photoCount) },
-        f:row { f:static_text { title = "预期帧数:", width = 90 },
+        f:row { f:static_text { title = "预期帧数（0=自动）:", width = 145 },
           f:edit_field { value = bind "expectedFrames", width_in_chars = 6, precision = 0 } },
         f:row { f:static_text { title = "胶片格式:", width = 90 },
           f:popup_menu { value = bind "formatIndex", items = menuItems(FORMAT_OPTIONS), width_in_chars = 16 } },
