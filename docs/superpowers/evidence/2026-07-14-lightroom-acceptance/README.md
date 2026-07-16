@@ -65,15 +65,25 @@ contract alone could not close.
   has 174 manifest lines and exactly 174 payload files/links, and contains no
   tests, preview state, bytecode, `marketing/`, or `.claude/` content.
 
-The exact ZIP install into `~/Library/Application Support/Adobe/Lightroom/Modules`
-was attempted after Lightroom quit, but the managed approval layer rejected
-the external write because the current approval quota was exhausted. No
-alternate installation path was used. The direct 02:07 behavior run therefore
-used the current repository plugin registered in Lightroom (the log identifies
-that source path), while the final ZIP was independently built and verified.
+## Final installed-package acceptance
 
-The final live HTTP port-binding rerun was likewise rejected by the same
-managed approval boundary after sandboxed localhost binding failed. The prior
-current-feature HTTP acceptance remains valid for behavior (`/health` 200 and
-`/analyze` 200 with six frames); the v2.5.0-only change to that path is version
-metadata.
+On 2026-07-16, Lightroom Classic was quit, and the exact ZIP above was
+extracted and installed with its top-level rollback-safe `install.sh` into
+`~/Library/Application Support/Adobe/Lightroom/Modules`.
+
+- The installed package's 174 payload entries match its manifest and
+  `codesign --verify --deep --strict` passes.
+- `zip-installed-plugin-manager.jpeg` records the restarted Lightroom plugin
+  manager showing version 2.5.0, the bundled `NegativeCutter` engine, and the
+  enabled Modules-directory path.
+- SHA-256 of `zip-installed-plugin-manager.jpeg`:
+  `ef30253883543565c670243a020e1dfff13b036efa8415e270b5e2f396708780`.
+- The installed engine directly processed the real `52191.tif` fixture with
+  six frames, `needsReview=false`, and `cropAngle=0.0`.
+- A fresh local HTTP rerun passed `/health` and `/analyze` (both HTTP 200;
+  six frames and `needsReview=false`), and the standalone APP completed its
+  offscreen launch smoke. The APP is verification-only and remains outside
+  this release's attachment scope.
+
+The disabled repository-path plugin remains registered in Lightroom, but the
+enabled plugin used for this acceptance is the exact installed ZIP package.
