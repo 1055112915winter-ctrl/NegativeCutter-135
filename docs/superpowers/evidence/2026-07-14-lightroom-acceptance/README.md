@@ -1,4 +1,4 @@
-# Lightroom v2.5.0 acceptance evidence
+# Lightroom v2.4.6 acceptance evidence
 
 This directory keeps durable evidence that is intentionally excluded from the
 release ZIP by `NegativeCutter-135.lrplugin/build.sh`'s explicit allowlist.
@@ -28,7 +28,7 @@ The original acceptance session is
 - Lines 583–584 record restoration from the validated release ZIP.
 - Lines 680–681 record preservation of 20 unmarked empty directories.
 
-These references replace the earlier unindexed lifecycle claim. Final v2.5.0
+These references replace the earlier unindexed lifecycle claim. Final v2.4.6
 package acceptance evidence is appended here after the exact release ZIP is
 installed and Lightroom is restarted.
 
@@ -58,9 +58,9 @@ contract alone could not close.
 
 ## Final release artifact
 
-- Artifact: `release/NegativeCutter-135-v2.5.0.zip`
+- Artifact: `release/NegativeCutter-135-v2.4.6.zip`
 - SHA-256:
-  `1688d18f7da22f21961f15913378dac573e7fe5f49eb9ff613d5d0ee1de5be28`
+  `9ebc48a2e009a9fb72ae7723fd40a6463007045e464a60c0fda199ae918ae66b`
 - The extracted package is arm64, passes `codesign --verify --deep --strict`,
   has 183 manifest lines and exactly 183 payload files/links, and contains no
   tests, preview state, bytecode, `marketing/`, or `.claude/` content.
@@ -74,7 +74,7 @@ extracted and installed with its top-level rollback-safe `install.sh` into
 - The installed package's 183 payload entries match its manifest and
   `codesign --verify --deep --strict` passes.
 - `zip-installed-plugin-manager.jpeg` records the restarted Lightroom plugin
-  manager showing version 2.5.0, the bundled `NegativeCutter` engine, and the
+  manager showing version 2.4.6, the bundled `NegativeCutter` engine, and the
   enabled Modules-directory path.
 - SHA-256 of `zip-installed-plugin-manager.jpeg`:
   `ef30253883543565c670243a020e1dfff13b036efa8415e270b5e2f396708780`.
