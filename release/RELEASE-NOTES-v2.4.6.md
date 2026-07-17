@@ -22,6 +22,8 @@ v2.4.6 同时更新 Lightroom Classic 插件和 macOS 独立版，新增单排 1
 - 修复 EXIF orientation 5/7 对应的 `AD/CB` 方向映射，避免 120 帧被写成狭长竖条或镜像裁切
 - 批处理中单张失败后会继续处理后续照片；零成功批次正确显示为失败
 - 加固预览临时文件、串行渲染和关闭清理流程
+- 修复带 EXIF orientation 5/7（Lightroom 中常见为 `AD/CB`）的 120 TIFF 预览方向不匹配：预览使用缩略图坐标，用户确认后才转换为 Lightroom 最终裁切坐标
+- 逐张预览与整批统一模式采用同一坐标转换契约；整批像素偏移先在预览坐标中应用，再转换到每张照片自己的 Lightroom 方向
 
 ### macOS 独立版
 
@@ -57,11 +59,11 @@ v2.4.6 同时更新 Lightroom Classic 插件和 macOS 独立版，新增单排 1
 - 65 项核心 Python 测试、插件加固测试、Lua 契约测试通过
 - 4 条真实 135 TIFF、1 条 DNG、2 条真实 120 TIFF 回归通过
 - 120 Auto 与显式 645 路径通过；两条像素真值样本均在标注范围内
+- 用户已在真实 `Untitled (3).tif` 预览中确认方向恢复正常；AD/CB 单张确认与整批统一偏移回归通过
 - App 成品签名结构、插件成品签名、发布清单和打包后 smoke 通过
 
 ## 发布附件
 
 - `NegativeCutter-135-v2.4.6.zip`
 - `NegativeCutter-135-v2.4.6-Standalone.zip`
-
 

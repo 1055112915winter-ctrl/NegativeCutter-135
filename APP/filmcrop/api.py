@@ -33,7 +33,7 @@ _server_instance: Any = None
 
 app = None
 if HAS_FASTAPI:
-    app = FastAPI(title="FilmCrop API", version="2.4.7")
+    app = FastAPI(title="FilmCrop API", version="2.4.6")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost", "http://127.0.0.1"],

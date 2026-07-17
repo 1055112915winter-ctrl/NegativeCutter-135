@@ -9,7 +9,7 @@ BUILD_SCRIPT = ROOT / "APP/scripts/build_app.sh"
 SPEC = ROOT / "APP/NegativeCutter.spec"
 
 
-VER = "2.4.7"
+VER = "2.4.6"
 
 
 class PackageAppScriptTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class PackageAppScriptTest(unittest.TestCase):
         for source in (app_init, app_api, spec, plugin_init, plugin_api, info):
             self.assertIn(VER, source)
         self.assertIn("minor = 4", info)
-        self.assertIn("revision = 7", info)
+        self.assertIn("revision = 6", info)
 
     def test_script_exposes_expected_cli(self):
         self.assertTrue(SCRIPT.is_file())
