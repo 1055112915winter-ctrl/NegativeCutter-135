@@ -30,6 +30,11 @@ FILM_FORMATS = {
 MEDIUM_FORMAT_CODES = frozenset(
     code for code, spec in FILM_FORMATS.items() if spec.family == "120"
 )
+MEDIUM_FORMAT_ASPECT_RATIOS = tuple(
+    dict.fromkeys(
+        spec.aspect_ratio for spec in FILM_FORMATS.values() if spec.family == "120"
+    )
+)
 KNOWN_ASPECT_RATIOS = tuple(
     dict.fromkeys(spec.aspect_ratio for spec in FILM_FORMATS.values())
 )

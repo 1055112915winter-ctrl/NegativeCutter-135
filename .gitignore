@@ -38,6 +38,11 @@ docs/
 scripts/
 vendor-analysis/
 
+# Maintained Phase 11 precision evaluator
+!scripts/
+scripts/*
+!scripts/evaluate_120_precision.py
+
 # Local one-off investigations (maintained docs/scripts are tracked)
 docs/detector-ab-comparison.md
 

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "coordinateSpace": "decoded stored-pixel coordinates before Lightroom orientation mapping",
+  "annotationMethod": "two-pass visual inspection of enlarged gap crops plus independent left/middle/right band edge consensus",
+  "fixtures": [
+    {
+      "fileName": "Untitled (3).tif",
+      "environmentVariable": "NEGATIVECUTTER_TEST_120_A",
+      "sha256": "dcc82037f2425b2ba6dabc339ea53b2fc65ae29e7ae66dade846619de4107a35",
+      "width": 5301,
+      "height": 16746,
+      "orientation": 7,
+      "frameCount": 4,
+      "crossAxisEdgeBands": {
+        "near": [0, 45],
+        "far": [5270, 5301]
+      },
+      "gapEdgeBands": [
+        {"left": [4095, 4100], "right": [4306, 4314]},
+        {"left": [8313, 8316], "right": [8657, 8665]},
+        {"left": [12664, 12666], "right": [12953, 12957]}
+      ]
+    },
+    {
+      "fileName": "未标题(1).tif",
+      "environmentVariable": "NEGATIVECUTTER_TEST_120_B",
+      "sha256": "cb5a2d2eb4bdc17544e155bd7f87b8fa1a44513ac34ba3c11e6cb3717e291e3a",
+      "width": 5208,
+      "height": 16886,
+      "orientation": 5,
+      "frameCount": 4,
+      "crossAxisEdgeBands": {
+        "near": [0, 40],
+        "far": [5180, 5208]
+      },
+      "gapEdgeBands": [
+        {"left": [3964, 4040], "right": [4200, 4219]},
+        {"left": [8197, 8218], "right": [8660, 8680]},
+        {"left": [12681, 12701], "right": [12878, 12918]}
+      ]
+    }
+  ]
+}

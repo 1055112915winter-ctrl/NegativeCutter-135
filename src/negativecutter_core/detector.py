@@ -19,7 +19,11 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from .rotation import RotationEstimate, evaluate_rotation_offsets
-from .formats import KNOWN_ASPECT_RATIOS, MEDIUM_FORMAT_CODES
+from .formats import (
+    KNOWN_ASPECT_RATIOS,
+    MEDIUM_FORMAT_ASPECT_RATIOS,
+    MEDIUM_FORMAT_CODES,
+)
 from .medium_format import should_use_medium_format
 
 Image.MAX_IMAGE_PIXELS = None
@@ -1756,6 +1760,88 @@ def _detect_120_film_region(arr: np.ndarray, is_horizontal: bool):
         return 0, arr.shape[1]
 
 
+def _refine_120_gap_edges_multiband(
+    arr: np.ndarray,
+    is_horizontal: bool,
+    gap_edges,
+    pitch: float,
+    film_region,
+):
+    """Refine each gap from three independent cross-axis intensity bands.
+
+    A strong scene edge can dominate the full-strip projection. Splitting the
+    film into three bands and taking the median edge position requires support
+    from more than one part of the frame while preserving real per-gap widths.
+    """
+    if not gap_edges or pitch <= 0:
+        return gap_edges
+
+    scan_size = arr.shape[1] if is_horizontal else arr.shape[0]
+    near, far = film_region
+    if far - near < 3:
+        return gap_edges
+
+    band_bounds = np.linspace(near, far, 4, dtype=int)
+    search_half = max(80, int(pitch * 0.08))
+    center_guard = max(8, int(pitch * 0.005))
+    min_width = max(20, int(pitch * 0.01))
+    max_width = max(min_width + 1, int(pitch * 0.18))
+    max_spread = max(20, int(pitch * 0.06))
+    refined = []
+
+    for original_left, original_right in gap_edges:
+        center = (original_left + original_right) // 2
+        left_positions = []
+        right_positions = []
+
+        for band_index in range(3):
+            band_near = int(band_bounds[band_index])
+            band_far = int(band_bounds[band_index + 1])
+            if band_far <= band_near:
+                continue
+            if is_horizontal:
+                projection = np.mean(
+                    arr[band_near:band_far, :].astype(np.float32), axis=0
+                )
+            else:
+                projection = np.mean(
+                    arr[:, band_near:band_far].astype(np.float32), axis=1
+                )
+            gradient = np.abs(np.diff(projection, prepend=projection[0]))
+
+            left_start = max(0, center - search_half)
+            left_end = max(left_start, center - center_guard)
+            right_start = min(scan_size, center + center_guard)
+            right_end = min(scan_size, center + search_half)
+            if left_end <= left_start or right_end <= right_start:
+                continue
+
+            left_positions.append(
+                left_start + int(np.argmax(gradient[left_start:left_end]))
+            )
+            right_positions.append(
+                right_start + int(np.argmax(gradient[right_start:right_end]))
+            )
+
+        if len(left_positions) < 2 or len(right_positions) < 2:
+            refined.append((original_left, original_right))
+            continue
+
+        left = int(np.median(left_positions))
+        right = int(np.median(right_positions))
+        width = right - left
+        positions_consistent = (
+            max(left_positions) - min(left_positions) <= max_spread
+            and max(right_positions) - min(right_positions) <= max_spread
+        )
+        if positions_consistent and min_width <= width <= max_width:
+            refined.append((left, right))
+        else:
+            refined.append((original_left, original_right))
+
+    return refined
+
+
 def _detect_120_gaps(
     arr: np.ndarray,
     is_horizontal: bool,
@@ -1842,7 +1928,11 @@ def _detect_120_gaps(
             max(film_span, median_height) / min(film_span, median_height)
             if min(film_span, median_height) > 0 else 0
         )
-        known_ratios = [1.0, 7 / 6, 5 / 4, 3 / 2]
+        # This is a coarse whole-strip geometry heuristic, not the final frame
+        # aspect ratio. Film-base margins can shift the measured ratio toward
+        # a non-120 standard, so keep the broad registry here; final 120 aspect
+        # snapping below is restricted to MEDIUM_FORMAT_ASPECT_RATIOS.
+        known_ratios = KNOWN_ASPECT_RATIOS
         ratio_dist = (
             min(abs(detected_ratio / r - 1.0) for r in known_ratios)
             if detected_ratio > 0 else 1.0
@@ -1998,23 +2088,17 @@ def _detect_120_gaps(
             # Fallback: brightness threshold
             gap_edges.append(_brightness_fallback(center))
 
-    # Normalise gap widths to the median so the visual spacing stays
-    # consistent across the whole strip.  Per-gap widths can vary wildly
-    # because some boundaries have much stronger gradient peaks than others.
-    if len(gap_edges) >= 2:
-        widths = [re - le for le, re in gap_edges]
-        median_w = int(np.median(widths))
-        if median_w < min_gap_half * 2:
-            median_w = min_gap_half * 2
-        elif median_w > max_gap_half * 2:
-            median_w = max_gap_half * 2
-        normalized = []
-        for le, re in gap_edges:
-            center = (le + re) // 2
-            new_le = max(0, center - median_w // 2)
-            new_re = min(scan_size, center + median_w // 2)
-            normalized.append((int(new_le), int(new_re)))
-        gap_edges = normalized
+    # Preserve each measured physical gap width. Real 120 scans can contain
+    # uneven inter-frame spacing, and forcing every gap to the strip median
+    # moves both crop edges into frame content. Candidate gates above already
+    # bound implausibly narrow or wide pairs; fallback gaps remain conservative.
+    gap_edges = _refine_120_gap_edges_multiband(
+        arr,
+        is_horizontal,
+        gap_edges,
+        pitch,
+        (near, far),
+    )
 
     return gap_edges, (near, far), best_n
 
@@ -2084,7 +2168,7 @@ def analyze_image_120(
                 long_span = orig_long_edges[1] - orig_long_edges[0]
                 if long_span > 0:
                     raw_ratio = max(median_scan, long_span) / min(median_scan, long_span)
-                    known = [1.0, 7 / 6, 5 / 4, 3 / 2]
+                    known = MEDIUM_FORMAT_ASPECT_RATIOS
                     best = min(known, key=lambda r: abs(raw_ratio - r) / r)
                     if abs(raw_ratio - best) / best <= 0.03:
                         aspect_ratio = best

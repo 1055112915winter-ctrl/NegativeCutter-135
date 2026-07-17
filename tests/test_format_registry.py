@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from negativecutter_core.formats import (
     FILM_FORMATS,
+    MEDIUM_FORMAT_ASPECT_RATIOS,
     MEDIUM_FORMAT_CODES,
     format_aspect_ratio,
     format_family,
@@ -16,6 +17,10 @@ from negativecutter_core.medium_format import should_use_medium_format
 
 
 class FormatRegistryTests(unittest.TestCase):
+    def test_medium_format_ratios_come_only_from_120_registry_entries(self):
+        self.assertIn(4 / 3, MEDIUM_FORMAT_ASPECT_RATIOS)
+        self.assertNotIn(5 / 4, MEDIUM_FORMAT_ASPECT_RATIOS)
+
     def test_all_supported_120_formats_are_registered(self):
         self.assertEqual(
             MEDIUM_FORMAT_CODES,
