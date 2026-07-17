@@ -5,7 +5,7 @@ A standalone Python package for detecting frames in scanned film strips
 and exporting crop boundaries for Lightroom or standalone use.
 """
 
-__version__ = "2.5.0"
+__version__ = "2.4.6"
 __all__ = [
     "analyze_image",
     "build_frames",

@@ -9,10 +9,24 @@ BUILD_SCRIPT = ROOT / "APP/scripts/build_app.sh"
 SPEC = ROOT / "APP/NegativeCutter.spec"
 
 
-VER = "2.4.5"
+VER = "2.4.6"
 
 
 class PackageAppScriptTest(unittest.TestCase):
+    def test_app_and_lightroom_plugin_share_release_version(self):
+        app_init = (ROOT / "APP/filmcrop/__init__.py").read_text(encoding="utf-8")
+        app_api = (ROOT / "APP/filmcrop/api.py").read_text(encoding="utf-8")
+        spec = SPEC.read_text(encoding="utf-8")
+        plugin = ROOT / "NegativeCutter-135.lrplugin"
+        plugin_init = (plugin / "filmcrop/__init__.py").read_text(encoding="utf-8")
+        plugin_api = (plugin / "filmcrop/api.py").read_text(encoding="utf-8")
+        info = (plugin / "Info.lua").read_text(encoding="utf-8")
+
+        for source in (app_init, app_api, spec, plugin_init, plugin_api, info):
+            self.assertIn(VER, source)
+        self.assertIn("minor = 4", info)
+        self.assertIn("revision = 6", info)
+
     def test_script_exposes_expected_cli(self):
         self.assertTrue(SCRIPT.is_file())
         self.assertTrue(SCRIPT.stat().st_mode & 0o111)
