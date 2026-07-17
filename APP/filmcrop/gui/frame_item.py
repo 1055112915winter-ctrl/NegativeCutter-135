@@ -47,6 +47,7 @@ class DraggableFrameItem(QGraphicsRectItem):
     def _update_pen(self, is_hovered=False):
         pen = QPen(self._color)
         pen.setWidth(3 if is_hovered else 2)
+        pen.setCosmetic(True)
         pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
         self.setPen(pen)
         # Subtle fill when highlighted
@@ -69,8 +70,16 @@ class DraggableFrameItem(QGraphicsRectItem):
     def _edge_at(self, pos: QPointF) -> str | None:
         """Return which edge or handle is near *pos*, or None."""
         rect = self.rect()
-        tol = _EDGE_TOLERANCE
-        hs = _HANDLE_SIZE / 2
+        # Event positions are expressed in image/scene units. Whole-roll scans
+        # are commonly fitted at <5% scale, where a fixed 12 image-pixel hit
+        # area becomes less than one physical screen pixel. Convert the desired
+        # interaction sizes from viewport pixels back into item coordinates.
+        view_scale = 1.0
+        if self.scene() is not None and self.scene().views():
+            view_scale = abs(float(self.scene().views()[0].transform().m11()))
+        view_scale = max(view_scale, 1e-6)
+        tol = _EDGE_TOLERANCE / view_scale
+        hs = (_HANDLE_SIZE / 2) / view_scale
 
         corners = [
             ("tl", rect.left(), rect.top()),

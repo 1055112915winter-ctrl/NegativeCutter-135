@@ -12,6 +12,8 @@ FIXTURES = ROOT / "tests" / "fixtures"
 sys.path.insert(0, str(ROOT / "APP"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 from PIL import Image
 
@@ -91,6 +93,47 @@ class GuiFrameEditingTest(unittest.TestCase):
         view._frame_items[0]._on_released(frames[0], original)
 
         self.assertEqual(events, [(0, True, original)])
+
+    def test_fitted_long_scan_keeps_edge_hit_area_in_screen_pixels(self):
+        frame = _frame(1, 100, 900)
+        frame["top"] = 100
+        frame["bottom"] = 3900
+        view = ImageView()
+        view.resize(600, 600)
+        view._scene.setSceneRect(0, 0, 1000, 4000)
+        view.fitInView(view._scene.sceneRect())
+        view.set_frame_overlays([frame])
+
+        item = view._frame_items[0]
+        scale = abs(view.transform().m11())
+        six_screen_pixels_inside_left = 6.0 / scale
+
+        self.assertEqual(
+            item._edge_at(QPointF(frame["left"] + six_screen_pixels_inside_left, 2000)),
+            "left",
+        )
+
+    def test_mouse_drag_moves_edge_after_long_scan_is_fitted(self):
+        frame = _frame(1, 100, 900)
+        frame["top"] = 100
+        frame["bottom"] = 3900
+        view = ImageView()
+        view.resize(600, 600)
+        view._scene.setSceneRect(0, 0, 1000, 4000)
+        view.fitInView(view._scene.sceneRect())
+        view.set_frame_overlays([frame])
+        view.show()
+        self.app.processEvents()
+
+        scale = abs(view.transform().m11())
+        start = view.mapFromScene(QPointF(frame["left"] + 6.0 / scale, 2000))
+        end = start + QPointF(20, 0).toPoint()
+        QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(view.viewport(), pos=end, delay=20)
+        QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=end)
+
+        self.assertGreater(frame["left"], 100)
+        view.close()
 
     def test_reset_image_state_clears_canvas_and_edit_history(self):
         with tempfile.TemporaryDirectory() as tmp:
