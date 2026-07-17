@@ -60,6 +60,27 @@ local function aligned(orientation)
     return ProcessAgent.directionAlign(result, photo)
 end
 
+local function alignedSameAxis(orientation)
+    local result = {
+        sourceWidth = 1000,
+        sourceHeight = 2000,
+        isHorizontal = false,
+        cropAngle = 1.25,
+        frames = {{
+            relativeTop = 0.1,
+            relativeBottom = 0.4,
+            relativeLeft = 0.0,
+            relativeRight = 0.6,
+        }},
+    }
+    local photo = {getRawMetadata = function(_, key)
+        if key == "dimensions" then return {width = 1000, height = 2000} end
+        if key == "orientation" then return orientation end
+        return nil
+    end}
+    return ProcessAgent.directionAlign(result, photo)
+end
+
 local bc = aligned("BC")
 assertNear(0.4, bc.frames[1].relativeTop, "BC top")
 assertNear(1.0, bc.frames[1].relativeBottom, "BC bottom")
@@ -73,5 +94,23 @@ assertNear(0.6, da.frames[1].relativeBottom, "DA bottom")
 assertNear(0.6, da.frames[1].relativeLeft, "DA left")
 assertNear(0.9, da.frames[1].relativeRight, "DA right")
 assertNear(-1.25, da.cropAngle, "DA angle")
+
+-- Lightroom returns the reverse-edge labels for mirrored EXIF orientations
+-- found in the real 120 fixtures: CB = EXIF 5 (transpose), AD = EXIF 7
+-- (transverse).  Their displayed dimensions can already match the Python
+-- decode, so the orientation tag itself must trigger the transform.
+local cb = alignedSameAxis("CB")
+assertNear(0.0, cb.frames[1].relativeTop, "CB top")
+assertNear(0.6, cb.frames[1].relativeBottom, "CB bottom")
+assertNear(0.1, cb.frames[1].relativeLeft, "CB left")
+assertNear(0.4, cb.frames[1].relativeRight, "CB right")
+assertNear(-1.25, cb.cropAngle, "CB angle")
+
+local ad = alignedSameAxis("AD")
+assertNear(0.4, ad.frames[1].relativeTop, "AD top")
+assertNear(1.0, ad.frames[1].relativeBottom, "AD bottom")
+assertNear(0.6, ad.frames[1].relativeLeft, "AD left")
+assertNear(0.9, ad.frames[1].relativeRight, "AD right")
+assertNear(-1.25, ad.cropAngle, "AD angle")
 
 print("process agent orientation: PASS")

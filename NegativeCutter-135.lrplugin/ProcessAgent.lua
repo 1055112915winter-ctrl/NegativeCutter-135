@@ -400,7 +400,10 @@ function ProcessAgent.directionAlign(result, photo)
   local isPyHorizontal = result.isHorizontal
   local isLrHorizontal = lrWidth >= lrHeight
 
-  -- Attempt to read Lightroom's orientation string (AB/BC/CD/DA).
+  -- Attempt to read Lightroom's orientation string.  Besides the four pure
+  -- rotations (AB/BC/CD/DA), real TIFFs can expose mirrored EXIF 5/7 values
+  -- as CB/AD.  Those two require an axis swap even when Lightroom and the
+  -- Python decode already report the same portrait/landscape dimensions.
   -- When present, this gives an unambiguous rotation direction.
   local ok, lrOrientation = LrTasks.pcall(function()
     return photo:getRawMetadata("orientation")
@@ -414,7 +417,11 @@ function ProcessAgent.directionAlign(result, photo)
   local needsRotate = false
   local rotationMode = nil
 
-  if lrOrientation == "CD" then
+  if lrOrientation == "CB" or lrOrientation == "AD" then
+    needsRotate = true
+    rotationMode = lrOrientation
+    logger:trace("orientation=" .. lrOrientation .. ", applying mirrored 90° coordinate transform")
+  elseif lrOrientation == "CD" then
     -- Explicit 180° rotation. Aspect-ratio heuristic misses this because
     -- width/height stay the same, so we rely on the orientation tag.
     needsRotate = true
@@ -458,6 +465,18 @@ function ProcessAgent.directionAlign(result, photo)
       -- 90° counter-clockwise: (t,b,l,r) -> (l,r,1-b,1-t)
       frame.relativeTop = origRelLeft
       frame.relativeBottom = origRelRight
+      frame.relativeLeft = 1.0 - origRelBottom
+      frame.relativeRight = 1.0 - origRelTop
+    elseif rotationMode == "CB" then
+      -- EXIF 5 / transpose: (t,b,l,r) -> (l,r,t,b)
+      frame.relativeTop = origRelLeft
+      frame.relativeBottom = origRelRight
+      frame.relativeLeft = origRelTop
+      frame.relativeRight = origRelBottom
+    elseif rotationMode == "AD" then
+      -- EXIF 7 / transverse: (t,b,l,r) -> (1-r,1-l,1-b,1-t)
+      frame.relativeTop = 1.0 - origRelRight
+      frame.relativeBottom = 1.0 - origRelLeft
       frame.relativeLeft = 1.0 - origRelBottom
       frame.relativeRight = 1.0 - origRelTop
     else
