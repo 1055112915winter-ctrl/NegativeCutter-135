@@ -71,7 +71,9 @@ class RecognitionUIContractTests(unittest.TestCase):
         for token in (
             "ProcessAgent.detectPhoto",
             "PreviewAgent.review",
-            "ProcessAgent.adjustDetection",
+            "ProcessAgent.previewPayload",
+            "ProcessAgent.alignPreviewFrames",
+            "ProcessAgent.adjustPreviewDetection",
             "ProcessAgent.createVirtualCopies",
         ):
             self.assertIn(token, self.workflow)
@@ -79,8 +81,15 @@ class RecognitionUIContractTests(unittest.TestCase):
     def test_batch_uniform_reuses_only_numeric_offsets_not_frames(self):
         for key in ("topPx", "bottomPx", "leftPx", "rightPx"):
             self.assertIn(key, self.workflow)
-        self.assertIn("ProcessAgent.adjustDetection(detection, sharedOffsets)", self.workflow)
+        self.assertIn("ProcessAgent.adjustPreviewDetection(detection, sharedOffsets)", self.workflow)
         self.assertNotIn("detection.frames = firstDetection.frames", self.workflow)
+
+    def test_preview_uses_thumbnail_coordinates_then_aligns_only_after_confirmation(self):
+        self.assertIn("local preview, previewError = ProcessAgent.previewPayload(detection)", self.workflow)
+        self.assertIn("frames = preview.frames", self.workflow)
+        self.assertIn("sourceWidth = preview.sourceWidth", self.workflow)
+        self.assertIn("sourceHeight = preview.sourceHeight", self.workflow)
+        self.assertIn("ProcessAgent.alignPreviewFrames(detection, preview.frames)", self.workflow)
 
     def test_per_photo_cancel_stops_future_work_without_rollback(self):
         self.assertIn('preview.status == "canceled"', self.workflow)

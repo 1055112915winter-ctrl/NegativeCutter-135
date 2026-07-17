@@ -621,19 +621,102 @@ function ProcessAgent.detectPhoto(photo, options)
   if not result or type(result.frames) ~= "table" or #result.frames == 0 then
     return nil, "分析失败 - " .. tostring(recognitionError or "未检测到帧")
   end
-  result = ProcessAgent.directionAlign(result, photo)
-  local width, height = tonumber(result.sourceWidth), tonumber(result.sourceHeight)
-  if not width or width <= 0 or not height or height <= 0 then return nil, "检测结果尺寸无效" end
+
+  -- The packaged detector and preview renderer share the decoded thumbnail
+  -- coordinate space. Lightroom crop settings use a different coordinate
+  -- space for rotated/mirrored TIFF orientations (notably AD/CB). Preserve
+  -- the cleaned thumbnail-space result for preview, then align a copy for the
+  -- final Lightroom crop. Mixing these spaces produces correct crops but
+  -- sideways preview overlays.
+  local previewWidth, previewHeight = tonumber(result.sourceWidth), tonumber(result.sourceHeight)
+  if not previewWidth or previewWidth <= 0 or not previewHeight or previewHeight <= 0 then
+    return nil, "检测结果尺寸无效"
+  end
   onStage("cleanup")
-  local frames = result.frames
   local filmType = options.filmType or prefs.filmType or "negative"
-  CropCleaner.cleanFrames(frames, result.sourceWidth, result.sourceHeight, filmType)
-  refreshAbsoluteFrames(frames, width, height)
+  CropCleaner.cleanFrames(result.frames, previewWidth, previewHeight, filmType)
+  refreshAbsoluteFrames(result.frames, previewWidth, previewHeight)
+  local preview = {
+    frames = deepCopy(result.frames),
+    sourceWidth = previewWidth,
+    sourceHeight = previewHeight,
+    isHorizontal = result.isHorizontal,
+    cropAngle = result.cropAngle or 0,
+  }
+
+  result = ProcessAgent.directionAlign(deepCopy(result), photo)
+  local width, height = tonumber(result.sourceWidth), tonumber(result.sourceHeight)
+  if not width or width <= 0 or not height or height <= 0 then return nil, "方向对齐结果尺寸无效" end
+  refreshAbsoluteFrames(result.frames, width, height)
   return {
     photo = photo, fileName = fileName, thumbnailPath = thumbnailPath,
     frames = deepCopy(result.frames), sourceWidth = width, sourceHeight = height,
-    cropAngle = result.cropAngle or 0,
+    cropAngle = result.cropAngle or 0, preview = preview,
   }, nil
+end
+
+function ProcessAgent.previewPayload(detection)
+  if type(detection) ~= "table" then return nil, "invalid detection" end
+  local preview = detection.preview
+  if type(preview) == "table" and type(preview.frames) == "table"
+    and tonumber(preview.sourceWidth) and tonumber(preview.sourceWidth) > 0
+    and tonumber(preview.sourceHeight) and tonumber(preview.sourceHeight) > 0 then
+    return {
+      frames = deepCopy(preview.frames),
+      sourceWidth = tonumber(preview.sourceWidth),
+      sourceHeight = tonumber(preview.sourceHeight),
+    }, nil
+  end
+  -- Backward-compatible fallback for injected/legacy detections whose preview
+  -- and Lightroom crop coordinates are already identical.
+  if type(detection.frames) ~= "table" then return nil, "preview frames are missing" end
+  return {
+    frames = deepCopy(detection.frames),
+    sourceWidth = tonumber(detection.sourceWidth),
+    sourceHeight = tonumber(detection.sourceHeight),
+  }, nil
+end
+
+function ProcessAgent.alignPreviewFrames(detection, previewFrames)
+  if type(detection) ~= "table" or type(previewFrames) ~= "table" then
+    return nil, "invalid preview alignment request"
+  end
+  local preview = detection.preview
+  if type(preview) ~= "table" then
+    local compatible = deepCopy(detection)
+    compatible.photo = detection.photo
+    compatible.frames = deepCopy(previewFrames)
+    return compatible, nil
+  end
+
+  local raw = {
+    frames = deepCopy(previewFrames),
+    sourceWidth = tonumber(preview.sourceWidth),
+    sourceHeight = tonumber(preview.sourceHeight),
+    isHorizontal = preview.isHorizontal,
+    cropAngle = preview.cropAngle or 0,
+  }
+  if not raw.sourceWidth or raw.sourceWidth <= 0 or not raw.sourceHeight or raw.sourceHeight <= 0 then
+    return nil, "invalid preview dimensions"
+  end
+  local aligned = ProcessAgent.directionAlign(raw, detection.photo)
+  local selected = deepCopy(detection)
+  selected.photo = detection.photo
+  selected.frames = deepCopy(aligned.frames)
+  selected.sourceWidth = tonumber(aligned.sourceWidth)
+  selected.sourceHeight = tonumber(aligned.sourceHeight)
+  selected.cropAngle = aligned.cropAngle or 0
+  refreshAbsoluteFrames(selected.frames, selected.sourceWidth, selected.sourceHeight)
+  return selected, nil
+end
+
+function ProcessAgent.adjustPreviewDetection(detection, offsets)
+  local preview, previewError = ProcessAgent.previewPayload(detection)
+  if not preview then return nil, previewError end
+  preview.photo = detection.photo
+  local adjusted, adjustError = ProcessAgent.adjustDetection(preview, offsets)
+  if not adjusted then return nil, adjustError end
+  return ProcessAgent.alignPreviewFrames(detection, adjusted.frames)
 end
 
 function ProcessAgent.adjustDetection(detection, offsets)

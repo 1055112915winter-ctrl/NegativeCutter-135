@@ -10,9 +10,10 @@ class LuaAdapterContractTests(unittest.TestCase):
         source = (ROOT / "NegativeCutter-135.lrplugin" / "ProcessAgent.lua").read_text(
             encoding="utf-8"
         )
-        call = "CropCleaner.cleanFrames(frames, result.sourceWidth, result.sourceHeight, filmType)"
+        call = "CropCleaner.cleanFrames(result.frames, previewWidth, previewHeight, filmType)"
 
         self.assertEqual(source.count(call), 1)
+        self.assertLess(source.index(call), source.index("ProcessAgent.directionAlign(deepCopy(result), photo)"))
 
 
 if __name__ == "__main__":

@@ -116,11 +116,13 @@ function RecognitionWorkflow.new(dependencies)
   end
 
   local function previewDetection(detection, runtime, title)
+    local preview, previewError = ProcessAgent.previewPayload(detection)
+    if not preview then return { status = "error", error = previewError } end
     return PreviewAgent.review(nil, {
-      frames = detection.frames,
+      frames = preview.frames,
       thumbnailPath = detection.thumbnailPath,
-      sourceWidth = detection.sourceWidth,
-      sourceHeight = detection.sourceHeight,
+      sourceWidth = preview.sourceWidth,
+      sourceHeight = preview.sourceHeight,
       title = title,
     }, runtime)
   end
@@ -192,7 +194,14 @@ function RecognitionWorkflow.new(dependencies)
               markTerminal()
               selected = nil
             else
-              selected.frames = preview.frames
+              local aligned, alignError = ProcessAgent.alignPreviewFrames(detection, preview.frames)
+              if not aligned then
+                stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. tostring(alignError)
+                markTerminal()
+                selected = nil
+              else
+                selected = aligned
+              end
             end
           elseif settings.previewMode == "batch_uniform" then
             if not sharedOffsets then
@@ -212,10 +221,17 @@ function RecognitionWorkflow.new(dependencies)
                   leftPx = preview.offsets.leftPx,
                   rightPx = preview.offsets.rightPx,
                 }
-                selected.frames = preview.frames
+                local aligned, alignError = ProcessAgent.alignPreviewFrames(detection, preview.frames)
+                if not aligned then
+                  stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. tostring(alignError)
+                  markTerminal()
+                  selected = nil
+                else
+                  selected = aligned
+                end
               end
             else
-              local adjusted, adjustError = ProcessAgent.adjustDetection(detection, sharedOffsets)
+              local adjusted, adjustError = ProcessAgent.adjustPreviewDetection(detection, sharedOffsets)
               if not adjusted then
                 stats.errors[#stats.errors + 1] = detection.fileName .. ": " .. tostring(adjustError)
                 markTerminal()

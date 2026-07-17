@@ -113,4 +113,48 @@ assertNear(0.6, ad.frames[1].relativeLeft, "AD left")
 assertNear(0.9, ad.frames[1].relativeRight, "AD right")
 assertNear(-1.25, ad.cropAngle, "AD angle")
 
+-- Preview overlays stay in the decoded thumbnail space. Only the confirmed
+-- frames cross into Lightroom's AD crop space; this prevents four horizontal
+-- 120 frames from appearing as four vertical columns in the preview dialog.
+local previewPhoto = {getRawMetadata = function(_, key)
+    if key == "dimensions" then return {width = 1000, height = 2000} end
+    if key == "orientation" then return "AD" end
+    return nil
+end}
+local previewDetection = {
+    photo = previewPhoto,
+    sourceWidth = 1000,
+    sourceHeight = 2000,
+    frames = {},
+    preview = {
+        sourceWidth = 1000,
+        sourceHeight = 2000,
+        isHorizontal = false,
+        cropAngle = 0,
+        frames = {{
+            relativeTop = 0.1,
+            relativeBottom = 0.4,
+            relativeLeft = 0.0,
+            relativeRight = 1.0,
+        }},
+    },
+}
+local previewPayload = assert(ProcessAgent.previewPayload(previewDetection))
+assertNear(0.1, previewPayload.frames[1].relativeTop, "preview top stays decoded")
+assertNear(0.4, previewPayload.frames[1].relativeBottom, "preview bottom stays decoded")
+assertNear(0.0, previewPayload.frames[1].relativeLeft, "preview left stays decoded")
+assertNear(1.0, previewPayload.frames[1].relativeRight, "preview right stays decoded")
+
+local confirmed = assert(ProcessAgent.alignPreviewFrames(previewDetection, previewPayload.frames))
+assertNear(0.0, confirmed.frames[1].relativeTop, "confirmed AD top")
+assertNear(1.0, confirmed.frames[1].relativeBottom, "confirmed AD bottom")
+assertNear(0.6, confirmed.frames[1].relativeLeft, "confirmed AD left")
+assertNear(0.9, confirmed.frames[1].relativeRight, "confirmed AD right")
+
+local batchAdjusted = assert(ProcessAgent.adjustPreviewDetection(previewDetection, {topPx = 100}))
+assertNear(0.0, batchAdjusted.frames[1].relativeTop, "batch AD top")
+assertNear(1.0, batchAdjusted.frames[1].relativeBottom, "batch AD bottom")
+assertNear(0.6, batchAdjusted.frames[1].relativeLeft, "batch AD left")
+assertNear(0.95, batchAdjusted.frames[1].relativeRight, "batch AD right maps preview top offset")
+
 print("process agent orientation: PASS")

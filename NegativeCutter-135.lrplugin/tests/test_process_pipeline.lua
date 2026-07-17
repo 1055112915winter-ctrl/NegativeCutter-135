@@ -83,7 +83,8 @@ do
   assert(ProcessAgent.adjustDetection(adjusted, { topPx = 1 }) == nil, "double adjustment must be rejected")
 end
 
--- Detection stages run in order and CropCleaner is called exactly once after alignment.
+-- Detection stages run in order and CropCleaner is called exactly once in
+-- thumbnail space before a copy is aligned for Lightroom application.
 do
   local stages = {}
   ProcessAgent.extractThumbnail = function() return "/thumb.jpg" end
@@ -103,7 +104,10 @@ do
     onStage = function(stage) stages[#stages + 1] = stage end })
   assert(detection and not err and detection.photo == photo and detection.fileName == "scan.tif", "detectPhoto schema failed")
   assert(cleanerCalls == 1 and detection.frames[1].top == 7, "detectPhoto must clean once and refresh absolute coordinates")
-  assert(table.concat(stages, ","):match("thumbnail.*recognition.*aligned.*cleanup"), "detectPhoto stage order failed")
+  assert(detection.preview and detection.preview.frames[1].top == 7,
+    "detectPhoto must preserve cleaned thumbnail-space preview frames")
+  assert(detection.preview.frames ~= detection.frames, "preview and Lightroom frame tables must not alias")
+  assert(table.concat(stages, ","):match("thumbnail.*recognition.*cleanup.*aligned"), "detectPhoto stage order failed")
 end
 
 -- Thumbnail failure preserves the legacy original-file fallback, and detection refresh does not apply preview minimums.
