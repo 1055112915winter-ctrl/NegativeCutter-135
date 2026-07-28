@@ -32,7 +32,10 @@ class ExportDialogTest(unittest.TestCase):
 
         settings.value.side_effect = read_value
 
-        with patch("filmcrop.gui.export_dialog.QSettings", return_value=settings):
+        # Other compatibility tests intentionally reload the ``filmcrop``
+        # package between cases. Patch the dialog's settings seam directly so
+        # this test remains isolated from that module-cache cleanup.
+        with patch.object(ExportDialog, "_settings", return_value=settings):
             dialog = ExportDialog(
                 image_path="/tmp/scan.tif",
                 default_format="TIFF",

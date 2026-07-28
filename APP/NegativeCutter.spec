@@ -229,8 +229,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'NegativeCutter',
         'CFBundleDisplayName': 'NegativeCutter',
-        'CFBundleShortVersionString': '2.4.6',
-        'CFBundleVersion': '2.4.6',
+        'CFBundleShortVersionString': '2.4.7',
+        'CFBundleVersion': '2.4.7',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '11.0',
     },
