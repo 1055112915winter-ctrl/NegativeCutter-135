@@ -89,6 +89,18 @@ task_plan.md
 findings.md
 progress.md
 
+# Internal agent, handoff, and planning guidance; keep local, never publish
+AGENTS.md
+**/AGENTS.md
+*HANDOFF*.md
+**/handoff/
+**/handoffs/
+*PLAN*.md
+**/plan/
+**/plans/
+**/agent.md
+**/agents.md
+
 # Secrets
 .env
 .env.*
