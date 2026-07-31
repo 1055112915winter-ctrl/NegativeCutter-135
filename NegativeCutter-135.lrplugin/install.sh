@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Integrity checks catch accidental corruption; neither checksums nor signatures prove publisher identity.
+# Integrity and runtime preflight checks happen before the installed target is
+# moved. A failed preflight leaves the previous plugin untouched.
 set -euo pipefail
 umask 077
 
@@ -13,6 +14,8 @@ STAGED="$MODULES_DIR/.${NAME}.staged"
 BACKUP="$MODULES_DIR/.${NAME}.backup"
 [[ ! -e "$STAGED" && ! -e "$BACKUP" ]] || { echo "ERROR: staging or backup already exists" >&2; exit 1; }
 [[ ! -e "$TARGET" || ( -d "$TARGET" && ! -L "$TARGET" ) ]] || { echo "ERROR: target must be a real directory" >&2; exit 1; }
+ENGINE="$SOURCE/NegativeCutter/NegativeCutter"
+[[ -x "$ENGINE" ]] || { echo "ERROR: engine is missing or not executable: $ENGINE" >&2; exit 1; }
 
 verify_manifest() {
   python3 - "$1" <<'PY'
@@ -57,9 +60,30 @@ trap finish EXIT
 trap 'exit 1' INT TERM
 verify_manifest "$SOURCE"
 [[ "${NEGATIVECUTTER_TEST_SKIP_CODESIGN:-0}" == 1 ]] || codesign --verify --deep --strict "$SOURCE/NegativeCutter"
+
+self_test() {
+  local root="$1" engine="$1/NegativeCutter/NegativeCutter" output
+  output="$("$engine" --self-test 2>&1)" || {
+    echo "ERROR: engine preflight failed before installation: $output" >&2
+    exit 1
+  }
+  python3 - "$output" "$(uname -m)" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if payload.get("ok") is not True or payload.get("errorCode") != "OK":
+    raise SystemExit("ERROR: engine self-test rejected release: " + str(payload))
+expected = sys.argv[2]
+actual = payload.get("architecture")
+if expected in {"arm64", "x86_64"} and actual != expected:
+    raise SystemExit(f"ERROR: engine architecture {actual!r} does not match host {expected!r}")
+PY
+}
+
+self_test "$SOURCE"
 ditto "$SOURCE" "$STAGED"
 verify_manifest "$STAGED"
 [[ "${NEGATIVECUTTER_TEST_SKIP_CODESIGN:-0}" == 1 ]] || codesign --verify --deep --strict "$STAGED/NegativeCutter"
+self_test "$STAGED"
 if [[ -e "$TARGET" ]]; then mv "$TARGET" "$BACKUP"; fi
 if [[ "${NEGATIVECUTTER_TEST_FAIL_SECOND_RENAME:-0}" == 1 ]]; then false; fi
 mv "$STAGED" "$TARGET"

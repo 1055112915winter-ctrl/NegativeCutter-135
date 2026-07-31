@@ -26,7 +26,7 @@
 
 ## 系统要求
 
-- macOS（Intel / Apple Silicon）
+- macOS 14.0+；下载与设备匹配的 `arm64` 或 `x86_64` 安装器。只有 Release 清单明确标为 `universal2` 时才可混用架构。
 - Adobe Lightroom Classic 10.0+
 - 135 或单排 120 胶片扫描长条图（DNG / TIFF）
 
@@ -36,12 +36,12 @@
 
 ### 一键安装（推荐）
 
-1. 从 [Releases](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases) 下载最新版 `NegativeCutter-135-v2.4.7.zip`
-2. 解压 ZIP 文件
-3. 双击运行 `install.sh`
-4. 脚本会自动检测 Lightroom 插件目录并安装
-5. 重启 Lightroom Classic
-6. 菜单：`文件 → 增效工具管理器`，确认状态为「正在运行」
+1. 从 [Releases](https://github.com/1055112915winter-ctrl/NegativeCutter-135/releases) 下载匹配架构、已公证的 `.pkg`
+2. 双击安装器并完成安装；安装前会执行引擎自检
+3. 重启 Lightroom Classic
+4. 菜单：`文件 → 增效工具管理器`，确认状态为「正在运行」
+
+若 Release 仅提供 ZIP，按 [插件安装指南](NegativeCutter-135.lrplugin/INSTALL.md) 使用其顶层 `install.sh`；ZIP 不是 stapled 安装器，不要手动清除 quarantine。
 
 ### 手动安装
 
@@ -102,10 +102,17 @@ Lightroom (创建虚拟副本 + 应用裁剪)
 # 本地开发环境
 pip install numpy pillow
 
-# 确定性测试
-scripts/run_unit_tests.sh
-scripts/run_fixture_tests.sh
+# 非 Computer Use 全部验证（确定性 + 真实素材）
+scripts/verify_non_computer_use.sh all
+
+# 只跑确定性门禁
+scripts/verify_non_computer_use.sh quick
+
+# 仅运行真实素材门（需要本地 test_files/ 或 FILMCROP_FIXTURE_ROOT）
+scripts/verify_non_computer_use.sh fixtures
 ```
+
+这套流程只覆盖源码、真实素材和本地静态检查，不包含 Lightroom 真实界面验收、Standalone 发布包重建或插件发布 staging。
 
 ## 开源协议
 

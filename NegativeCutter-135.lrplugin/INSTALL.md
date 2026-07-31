@@ -4,24 +4,24 @@
 
 ## 系统要求
 
-- **macOS**（Intel / Apple Silicon 均可）
+- **macOS 14.0+**；必须下载与 Mac 架构匹配的 Release 产物（`arm64` 或 `x86_64`）。只有 Release 清单明确标为 `universal2` 时才可混用架构。
 - **Lightroom Classic 10.0+**（建议使用最新版）
 - **135 或单排 120 胶片扫描长条图**（DNG / TIFF）
 
 ## 安装步骤
 
-推荐使用 Release 页面下载的 **release ZIP**：解压后，顶层会有 **top-level `install.sh`** 和 `NegativeCutter-135.lrplugin`。
+推荐使用 Release 页面下载并公证的 **`.pkg` 安装器**。它由 `Developer ID Installer` 签名并 stapled，安装前会验证插件清单、引擎架构、最低系统版本、代码签名和实际 `--self-test`。
 
-1. 在终端进入解压后的目录并运行：
+如果 Release 同时提供手动安装的 **release ZIP**，解压后顶层会有 **top-level `install.sh`** 和 `NegativeCutter-135.lrplugin`。ZIP 不是 stapled 安装器；脚本会在替换前执行同样的引擎自检。
+
+1. 双击匹配架构的 `.pkg`，按安装器提示完成安装；安装完成后请 **Restart Lightroom**。
+2. 若使用 ZIP，在终端进入解压后的目录并运行：
    ```bash
    ./install.sh
    ```
-   安装脚本会 **validates the release and stages it before replacing the installed plugin**；若安装过程中失败，**rolls back if installation fails**，保留原有插件。安装完成后请 **Restart Lightroom**，让它重新载入插件。
-2. （重要）如果从浏览器或网盘下载，macOS 会给文件加上「隔离属性」。打开终端，执行以下命令解除隔离（把路径换成你实际解压的位置）后，再运行安装脚本：
-   ```bash
-   xattr -dr com.apple.quarantine /path/to/extracted-release
-   ```
-   否则 Lightroom 可能无法加载插件或无法执行内置检测引擎。
+   安装脚本会 **validates the release and stages it before replacing the installed plugin**；若安装过程中失败，**rolls back if installation fails**，保留原有插件。自检失败时会显示架构、最低系统、动态库或签名/Gatekeeper 分类。
+
+不要用 `xattr -dr`、关闭 Gatekeeper 或授予“完全磁盘访问权限”来绕过失败。若浏览器下载的已签名产物仍被拦截，请保留原始 ZIP/PKG，并收集 `spctl`、`codesign`、`xattr` 和日志输出后提交问题。
 
 ### 高级选项与手动安装
 
@@ -72,8 +72,11 @@ Lightroom SDK 不支持插件内置快捷键，需要通过 macOS 系统设置�
 
 | 问题 | 解决方式 |
 |------|----------|
-| 插件管理器显示「✗ 未找到检测引擎」 | 确认 `.lrplugin` 文件夹中包含 `NegativeCutter` 可执行文件；如从网络下载，执行 `xattr -dr com.apple.quarantine /path/to/NegativeCutter-135.lrplugin` |
-| "检测引擎不存在" | 同上，或重新下载并重新运行 Release 的 `install.sh` |
+| 插件管理器显示「✗ 引擎自检失败 [UNSUPPORTED_ARCHITECTURE]」 | 下载匹配当前 Mac 架构的 `arm64` 或 `x86_64` 产物 |
+| 插件管理器显示「✗ 引擎自检失败 [UNSUPPORTED_MACOS_VERSION]」 | 升级到 Release 清单要求的 macOS 版本 |
+| 插件管理器显示「✗ 引擎自检失败 [DEPENDENCY_LOAD_FAILED]」 | 重新下载匹配架构的已签名 `.pkg`；不要手动替换 `_internal` 文件 |
+| 插件管理器显示「✗ 引擎自检失败 [SIGNATURE_OR_GATEKEEPER_BLOCKED]」 | 保留原始产物并提交 `spctl`、`codesign`、`xattr` 和 Lightroom 日志；不要清除隔离属性 |
+| "检测引擎不存在" | 确认安装器已完成并重启 Lightroom；ZIP 安装则重新运行 Release 的 `install.sh` |
 | "导入 filmcrop 失败: No module named 'numpy'" | 说明你当前用的是 `detect_thumb.py` 而不是打包引擎。检查 `.lrplugin` 中是否存在 `NegativeCutter` 可执行文件，然后重新运行 Release 的 `install.sh` |
 | "检测失败 / 未检测到帧" | 检查当前是否在 Lightroom 中选中了图片；查看日志 `~/Library/Logs/Adobe/Lightroom/LrClassicLogs/NegativeCutter.log` |
 | 检测帧数不正确 | 调整预期帧数设置；黑白负片效果最好 |

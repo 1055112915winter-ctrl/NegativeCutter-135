@@ -283,6 +283,10 @@ function RecognitionWorkflow.new(dependencies)
       stats.created,
       #stats.errors
     )
+    if #stats.errors > 0 then
+      body = body .. "\n首个错误: " .. tostring(stats.errors[1]) ..
+        "\n日志: ~/Library/Logs/Adobe/Lightroom/LrClassicLogs/NegativeCutter.log"
+    end
     if stats.unexpectedError then
       return "NegativeCutter - 未预期错误", body .. "\n\n" .. stats.unexpectedError, "critical"
     elseif stats.canceled then

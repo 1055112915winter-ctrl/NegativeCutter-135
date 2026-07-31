@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Code signing helper for NegativeCutter.app
-# Provides ad-hoc signing, verification, and distribution guidance.
+# Code signing helper for NegativeCutter.app.
+# Release signing is Developer ID + Hardened Runtime; there is no implicit
+# ad-hoc fallback because that produces the Gatekeeper failure this workflow
+# is meant to prevent.
 
 set -euo pipefail
 
@@ -11,15 +13,11 @@ usage() {
     echo "Usage: $(basename "$0") [sign|verify|status]"
     echo ""
     echo "Commands:"
-    echo "  sign    Ad-hoc sign the app bundle (default if no command given)"
+    echo "  sign    Developer ID sign the app bundle (default if no command given)"
     echo "  verify  Verify the signature and notarization status"
     echo "  status  Show detailed code signing information"
     echo ""
-    echo "Notes:"
-    echo "  - Ad-hoc signed apps (codesign -s -) require right-click > Open on first launch"
-    echo "  - For distribution, enroll in Apple Developer Program and use:"
-    echo "      codesign --sign 'Developer ID Application: Your Name' --deep --force NegativeCutter.app"
-    echo "  - Then notarize: xcrun notarytool submit NegativeCutter.zip --apple-id ..."
+    echo "Environment: NEGATIVECUTTER_DEVELOPER_ID_APPLICATION and optional NEGATIVECUTTER_TEAM_ID"
     exit 1
 }
 
@@ -32,21 +30,19 @@ fi
 
 case "$CMD" in
     sign)
-        echo "Ad-hoc signing $APP_BUNDLE ..."
-        codesign --force --deep --sign - "$APP_BUNDLE"
+        IDENTITY="${NEGATIVECUTTER_DEVELOPER_ID_APPLICATION:-${CODESIGN_IDENTITY:-}}"
+        if [[ -z "$IDENTITY" || "$IDENTITY" == "-" ]]; then
+            echo "ERROR: Developer ID Application identity is required; refusing ad-hoc signing" >&2
+            exit 2
+        fi
+        echo "Signing nested code with Developer ID Application ..."
+        "${APP_DIR}/../scripts/sign_macos_tree.sh" --root "$APP_BUNDLE" --identity "$IDENTITY"
+        codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP_BUNDLE"
         echo "Done."
-        echo ""
-        echo "First-launch instructions for users:"
-        echo "  1. Right-click NegativeCutter.app"
-        echo "  2. Select 'Open'"
-        echo "  3. Click 'Open' in the security dialog"
-        echo ""
-        echo "To remove the security warning permanently:"
-        echo "  System Settings → Privacy & Security → Security → 'Open Anyway'"
         ;;
     verify)
         echo "Verifying signature..."
-        if codesign --verify --verbose "$APP_BUNDLE" 2>&1; then
+        if codesign --verify --deep --strict "$APP_BUNDLE" 2>&1; then
             echo "Signature valid."
         else
             echo "Signature verification failed or app is unsigned."
@@ -56,7 +52,7 @@ case "$CMD" in
         if spctl --assess --type exec "$APP_BUNDLE" 2>&1; then
             echo "Gatekeeper: app passes assessment"
         else
-            echo "Gatekeeper: app will be blocked on first launch (expected for ad-hoc signing)"
+            echo "Gatekeeper: assessment failed; preserve diagnostics and do not remove quarantine"
         fi
         ;;
     status)

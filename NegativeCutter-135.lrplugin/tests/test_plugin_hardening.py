@@ -36,7 +36,9 @@ class PluginHardeningTests(unittest.TestCase):
         plugin = root / name
         (plugin / "NegativeCutter").mkdir(parents=True)
         (plugin / "NegativeCutter" / "NegativeCutter").write_text(
-            "#!/usr/bin/env sh\nexit 0\n", encoding="utf-8"
+            "#!/usr/bin/env sh\nif [ \"$1\" = \"--self-test\" ]; then\n"
+            "  printf '{\"ok\":true,\"errorCode\":\"OK\",\"architecture\":\"%s\"}\\n' \"$(uname -m)\"\n"
+            "  exit 0\nfi\nexit 0\n", encoding="utf-8"
         )
         (plugin / "NegativeCutter" / "NegativeCutter").chmod(0o755)
         (plugin / "Info.lua").write_text("return {}\n", encoding="utf-8")
@@ -253,12 +255,14 @@ class PluginHardeningTests(unittest.TestCase):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         self.assertIn("trap 'cleanup_failure; exit 1' INT TERM", source)
 
-    def test_build_ad_hoc_signs_fresh_pyinstaller_runtime_before_staging(self):
+    def test_build_requires_distribution_signing_before_staging(self):
         source = (PLUGIN / "build.sh").read_text(encoding="utf-8")
         build = "python3 -m PyInstaller NegativeCutter.spec"
-        sign = "codesign --force --deep --sign - dist/NegativeCutter"
+        sign = "sign_macos_tree.sh"
         stage = 'mkdir -p "$STAGE/$PLUGIN_DIR"'
         self.assertIn(sign, source)
+        self.assertIn("Developer ID Application identity is required", source)
+        self.assertNotIn("--sign - dist/NegativeCutter", source)
         self.assertLess(source.index(build), source.index(sign))
         self.assertLess(source.index(sign), source.index(stage))
 
@@ -346,6 +350,37 @@ print(module.has_api())
         self.assertIn(":gsub('%$', '\\\\$')", source)
         self.assertIn("isSystemFailure", source)
         self.assertIn("cp -RL", source)
+        self.assertIn("commandFor(runtimeExePath)", source)
+        self.assertNotIn("local retryCmd = cmd ..", source)
+
+    def test_plugin_manager_runs_structured_engine_self_test(self):
+        source = (PLUGIN / "PluginInfoProvider.lua").read_text(encoding="utf-8")
+        for required in ("--self-test", "errorCode", "ENGINE_NOT_STARTABLE", "引擎自检通过"):
+            self.assertIn(required, source)
+
+    def test_distribution_workflows_fail_closed_and_use_independent_gates(self):
+        root = PLUGIN.parent
+        signer = (root / "scripts" / "sign_macos_tree.sh").read_text(encoding="utf-8")
+        artifact_gate = (root / "scripts" / "verify_macos_artifact.sh").read_text(encoding="utf-8")
+        pkg = (root / "packaging" / "build_macos_pkg.sh").read_text(encoding="utf-8")
+        postinstall = (root / "packaging" / "pkg-scripts" / "postinstall").read_text(encoding="utf-8")
+        self.assertIn("refusing ad-hoc signing", signer)
+        self.assertIn("lipo -archs", artifact_gate)
+        self.assertIn("vtool -show-build", artifact_gate)
+        self.assertIn("notarytool submit", pkg)
+        self.assertIn("engine self-test", postinstall)
+
+    def test_cli_self_test_returns_structured_diagnostic(self):
+        proc = subprocess.run(
+            [sys.executable, str(PLUGIN / "detect_thumb.py"), "--self-test"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        payload = __import__("json").loads(proc.stdout)
+        self.assertIn("errorCode", payload)
+        self.assertIn("architecture", payload)
+        self.assertIn("dependencies", payload)
 
     def test_preview_render_cleanup_uses_lightroom_file_api(self):
         source = (PLUGIN / "ProcessAgent.lua").read_text(encoding="utf-8")

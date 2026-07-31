@@ -1,0 +1,53 @@
+#!/bin/bash
+# Move the signed package payload into the logged-in user's Lightroom Modules
+# directory. The package runs as root, so HOME must never be used directly.
+set -euo pipefail
+
+PAYLOAD="/Library/Application Support/NegativeCutter/NegativeCutter-135.lrplugin"
+CONSOLE_USER="$(stat -f '%Su' /dev/console)"
+[[ "$CONSOLE_USER" != "root" && "$CONSOLE_USER" != "loginwindow" ]] || {
+  echo "NegativeCutter: no logged-in user; payload left at $PAYLOAD" >&2
+  exit 1
+}
+CONSOLE_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory | awk '{print $2}')"
+[[ -n "$CONSOLE_HOME" && -d "$CONSOLE_HOME" ]] || { echo "NegativeCutter: cannot resolve user home" >&2; exit 1; }
+ENGINE="$PAYLOAD/NegativeCutter/NegativeCutter"
+[[ -x "$ENGINE" ]] || { echo "NegativeCutter: package engine is not executable" >&2; exit 1; }
+
+self_test="$($ENGINE --self-test 2>&1)" || { echo "NegativeCutter: engine self-test failed: $self_test" >&2; exit 1; }
+python3 - "$self_test" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if payload.get("ok") is not True or payload.get("errorCode") != "OK":
+    raise SystemExit("NegativeCutter: engine self-test rejected package: " + str(payload))
+PY
+
+MODULES="$CONSOLE_HOME/Library/Application Support/Adobe/Lightroom/Modules"
+NAME="NegativeCutter-135.lrplugin"
+TARGET="$MODULES/$NAME"
+STAGED="$MODULES/.$NAME.pkg-staged.$$"
+BACKUP="$MODULES/.$NAME.pkg-backup.$$"
+mkdir -p "$MODULES"
+committed=0
+rollback() {
+  status=$?
+  if [[ "$committed" != 1 ]]; then
+    rm -rf "$STAGED"
+    if [[ -e "$BACKUP" ]]; then
+      rm -rf "$TARGET"
+      mv "$BACKUP" "$TARGET"
+    fi
+  fi
+  exit "$status"
+}
+trap rollback EXIT
+
+ditto "$PAYLOAD" "$STAGED"
+if [[ -e "$TARGET" ]]; then mv "$TARGET" "$BACKUP"; fi
+mv "$STAGED" "$TARGET"
+chown -R "$CONSOLE_USER:$(id -g "$CONSOLE_USER")" "$TARGET"
+rm -rf "$BACKUP"
+rm -rf "/Library/Application Support/NegativeCutter"
+committed=1
+trap - EXIT
+echo "NegativeCutter installed for $CONSOLE_USER; restart Lightroom."

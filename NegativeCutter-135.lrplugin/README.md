@@ -9,13 +9,17 @@
 
 ## 安装
 
-从 Release 页面下载 **release ZIP** 并解压。压缩包顶层包含 **top-level `install.sh`** 与 `NegativeCutter-135.lrplugin`；在终端进入解压目录后执行：
+从 Release 页面优先下载与架构匹配、已公证的 **`.pkg` 安装器**。安装器会在安装前验证清单、架构、最低系统、签名和引擎 `--self-test`。
+
+若 Release 提供手动安装的 **release ZIP**，压缩包顶层包含 **top-level `install.sh`** 与 `NegativeCutter-135.lrplugin`；在终端进入解压目录后执行：
 
 ```bash
 ./install.sh
 ```
 
-脚本会 **validates the release and stages it before replacing the installed plugin**，并在出错时 **rolls back if installation fails**。完成后请 **Restart Lightroom**。
+脚本会 **validates the release and stages it before replacing the installed plugin**，执行引擎自检，并在出错时 **rolls back if installation fails**。完成后请 **Restart Lightroom**。
+
+不要用 `xattr -dr`、关闭 Gatekeeper 或授予“完全磁盘访问权限”绕过失败；若已签名产物仍被拦截，请保留原始产物和诊断输出。
 
 `NEGATIVECUTTER_MODULES_DIR` 是 **advanced/test override**，仅用于高级用户或测试指定 Modules 目录；普通安装无需设置。
 

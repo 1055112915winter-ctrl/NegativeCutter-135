@@ -7,8 +7,53 @@ local LrView = import 'LrView'
 local LrPrefs = import 'LrPrefs'
 local LrPathUtils = import 'LrPathUtils'
 local LrFileUtils = import 'LrFileUtils'
+local LrTasks = import 'LrTasks'
 
 local prefs = LrPrefs.prefsForPlugin()
+local json = dofile(LrPathUtils.child(_PLUGIN.path, 'json.lua'))
+
+local function shellEscape(value)
+  return '"' .. tostring(value):gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('%$', '\\$')
+    :gsub('`', '\\`'):gsub('\n', '\\n') .. '"'
+end
+
+local function engineSelfTest(path)
+  local outputPath = LrPathUtils.child(
+    LrPathUtils.getStandardFilePath('temp'),
+    'negativecutter-plugin-self-test.json'
+  )
+  local command = shellEscape(path) .. ' --self-test > ' .. shellEscape(outputPath) .. ' 2>&1'
+  local exitCode = LrTasks.execute(command)
+  local file = io.open(outputPath, 'r')
+  local output = file and (file:read('*a') or '') or ''
+  if file then file:close() end
+  LrFileUtils.delete(outputPath)
+  local firstBrace = output:find('{')
+  local payload
+  if firstBrace then
+    local ok, decoded = pcall(function() return json.decode(output:sub(firstBrace)) end)
+    if ok and type(decoded) == 'table' then payload = decoded end
+  end
+  if exitCode == 0 and payload and payload.ok == true then
+    return string.format('✓ 引擎自检通过 (%s, macOS %s)',
+      tostring(payload.architecture or '?'), tostring(payload.macOSVersion or '?'))
+  end
+  local code = payload and payload.errorCode or 'ENGINE_NOT_STARTABLE'
+  local detail = payload and payload.error or output:gsub('%s+', ' ')
+  local lowerOutput = output:lower()
+  if not payload then
+    if lowerOutput:find('bad cpu type') or lowerOutput:find('exec format') then
+      code = 'UNSUPPORTED_ARCHITECTURE'
+    elseif lowerOutput:find('dyld') or lowerOutput:find('library not loaded') then
+      code = 'DEPENDENCY_LOAD_FAILED'
+    elseif lowerOutput:find('operation not permitted') or lowerOutput:find('code signing')
+      or lowerOutput:find('killed') then
+      code = 'SIGNATURE_OR_GATEKEEPER_BLOCKED'
+    end
+  end
+  if detail == '' then detail = '进程未返回诊断 JSON' end
+  return string.format('✗ 引擎自检失败 [%s]: %s', code, detail:sub(1, 260))
+end
 
 return {
   sectionsForTopOfDialog = function(f, propertyTable)
@@ -42,9 +87,9 @@ return {
     local hasExe = fileExists(bundledExe)
     local scriptStatus
     if hasExe then
-      scriptStatus = "✓ 已找到打包引擎 (NegativeCutter)"
+      scriptStatus = engineSelfTest(bundledExe)
     elseif hasScript then
-      scriptStatus = "✓ 已找到检测脚本 (detect_thumb.py)"
+      scriptStatus = "✗ 只有开发脚本，未找到可运行的打包引擎（不会回退系统 Python）"
     else
       scriptStatus = "✗ 未找到检测引擎"
     end

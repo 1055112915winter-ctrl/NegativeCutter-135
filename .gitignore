@@ -42,6 +42,8 @@ vendor-analysis/
 !scripts/
 scripts/*
 !scripts/evaluate_120_precision.py
+!scripts/sign_macos_tree.sh
+!scripts/verify_macos_artifact.sh
 
 # Local one-off investigations (maintained docs/scripts are tracked)
 docs/detector-ab-comparison.md

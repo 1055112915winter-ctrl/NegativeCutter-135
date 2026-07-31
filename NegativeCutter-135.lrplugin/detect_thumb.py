@@ -9,6 +9,8 @@ FilmCrop 缩略图分析 - 兼容 CLI 入口
 
 import json
 import os
+import platform
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -39,6 +41,9 @@ def _log(msg):
 
 _log("detect_thumb.py started")
 
+MINIMUM_MACOS_VERSION = os.environ.get("NEGATIVECUTTER_MIN_MACOS_VERSION", "14.0")
+SUPPORTED_ARCHITECTURES = {"arm64", "x86_64"}
+
 # Force local filmcrop package to take precedence over any system installation
 _script_dir = str(Path(__file__).parent)
 if _script_dir not in sys.path:
@@ -65,6 +70,86 @@ def _load_detector():
         detector_mtime = 0
     _log("import analyze_image OK")
     return analyze_image, detector_path, detector_mtime
+
+
+def _version_tuple(value):
+    try:
+        return tuple(int(part) for part in value.split(".")[:3])
+    except (AttributeError, TypeError, ValueError):
+        return (0,)
+
+
+def _error_code(message):
+    text = str(message).lower()
+    if "bad cpu type" in text or "exec format" in text or "architecture" in text:
+        return "UNSUPPORTED_ARCHITECTURE"
+    if "dyld" in text or "library not loaded" in text or "no module named" in text:
+        return "DEPENDENCY_LOAD_FAILED"
+    if "operation not permitted" in text or "code signature" in text or "codesign" in text:
+        return "SIGNATURE_OR_GATEKEEPER_BLOCKED"
+    if "permission denied" in text or "cannot execute" in text:
+        return "EXECUTION_PERMISSION_DENIED"
+    return "ENGINE_LOAD_FAILED"
+
+
+def _quarantine_state(path):
+    if sys.platform != "darwin":
+        return "not-applicable"
+    try:
+        result = subprocess.run(
+            ["xattr", "-p", "com.apple.quarantine", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return "present" if result.returncode == 0 else "absent-or-unreadable"
+    except OSError:
+        return "unavailable"
+
+
+def _self_test():
+    """Run a photo-free runtime probe and return a structured diagnostic."""
+    architecture = platform.machine()
+    macos_version = platform.mac_ver()[0] if sys.platform == "darwin" else ""
+    result = {
+        "ok": True,
+        "errorCode": "OK",
+        "executablePath": sys.executable,
+        "architecture": architecture,
+        "pythonVersion": sys.version.split()[0],
+        "macOSVersion": macos_version or "unknown",
+        "minimumMacOSVersion": MINIMUM_MACOS_VERSION,
+        "quarantine": _quarantine_state(sys.executable),
+        "dependencies": {},
+        "signatureCheck": "run codesign/spctl outside the engine",
+    }
+    if sys.platform != "darwin":
+        result.update(ok=False, errorCode="UNSUPPORTED_PLATFORM", error="macOS is required")
+    elif architecture not in SUPPORTED_ARCHITECTURES:
+        result.update(
+            ok=False,
+            errorCode="UNSUPPORTED_ARCHITECTURE",
+            error=f"unsupported architecture: {architecture}",
+        )
+    elif macos_version and _version_tuple(macos_version) < _version_tuple(MINIMUM_MACOS_VERSION):
+        result.update(
+            ok=False,
+            errorCode="UNSUPPORTED_MACOS_VERSION",
+            error=f"macOS {macos_version} is below minimum {MINIMUM_MACOS_VERSION}",
+        )
+
+    try:
+        import numpy
+        result["dependencies"]["numpy"] = getattr(numpy, "__version__", "installed")
+        from PIL import Image
+        result["dependencies"]["Pillow"] = getattr(Image, "__version__", "installed")
+        _load_detector()
+        result["dependencies"]["detector"] = "loaded"
+    except Exception as exc:
+        result.update(ok=False, errorCode=_error_code(exc), error=str(exc))
+
+    print(json.dumps(result, separators=(",", ":")))
+    return 0 if result["ok"] else 1
 
 
 def _preview_error(message):
@@ -98,6 +183,8 @@ def _render_preview_cli(args):
 
 
 def main():
+    if "--self-test" in sys.argv[1:]:
+        return _self_test()
     if "--render-preview" in sys.argv[1:]:
         import argparse
         parser = argparse.ArgumentParser(add_help=False)
@@ -196,7 +283,7 @@ def main():
         import traceback
         tb = traceback.format_exc()
         _log(f"analyze_image FAILED: {e}\n{tb}")
-        result = {"error": str(e), "traceback": tb}
+        result = {"error": str(e), "errorCode": _error_code(e), "traceback": tb}
         diagnostics = getattr(e, "diagnostics", None)
         if isinstance(diagnostics, dict):
             result.update(diagnostics)

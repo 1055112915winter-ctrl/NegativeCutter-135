@@ -17,6 +17,7 @@ if root_src not in sys.path:
     sys.path.insert(0, root_src)
 
 block_cipher = None
+_target_arch = os.environ.get('PYI_TARGET_ARCH', None)
 
 a = Analysis(
     ['detect_thumb.py'],
@@ -182,7 +183,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,
+    target_arch=_target_arch,
     codesign_identity=None,
     entitlements_file=None,
 )

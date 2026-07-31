@@ -249,20 +249,22 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
   local exePath = localExePath
   logger:trace("使用插件目录引擎: " .. exePath)
 
-  local cmd = string.format('%s %s --frames %d --cleanup-scale 0.50',
-    shellEscape(exePath), shellEscape(inputPath), expectedFrames)
-
-  if originalPath and LrFileUtils.exists(originalPath) then
-    cmd = cmd .. ' --original ' .. shellEscape(originalPath)
+  local function commandFor(executable)
+    local command = string.format('%s %s --frames %d --cleanup-scale 0.50',
+      shellEscape(executable), shellEscape(inputPath), expectedFrames)
+    if originalPath and LrFileUtils.exists(originalPath) then
+      command = command .. ' --original ' .. shellEscape(originalPath)
+    end
+    if formatHint and formatHint ~= "" then
+      command = command .. ' --format ' .. shellEscape(formatHint)
+    end
+    if lrWidth and lrHeight then
+      command = command .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
+    end
+    return command
   end
 
-  if formatHint and formatHint ~= "" then
-    cmd = cmd .. ' --format ' .. shellEscape(formatHint)
-  end
-
-  if lrWidth and lrHeight then
-    cmd = cmd .. string.format(' --lr-width %d --lr-height %d', lrWidth, lrHeight)
-  end
+  local cmd = commandFor(exePath)
 
   local tempOutputFile = LrPathUtils.child(WORK_DIR, "output_" .. tostring(math.random(10000)) .. ".txt")
   -- 同时捕获 stderr，便于诊断异常
@@ -323,7 +325,10 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
       local cpExit = LrTasks.execute(cpCmd)
       if cpExit == 0 then
         LrTasks.execute(string.format('chmod +x %s', shellEscape(runtimeExePath)))
-        local retryCmd = cmd .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
+        -- The retry must execute the copied runtime, not the original path
+        -- that just failed. Rebuilding the full command also preserves all
+        -- format, Lightroom-dimension, and original-photo arguments.
+        local retryCmd = commandFor(runtimeExePath) .. ' > ' .. shellEscape(tempOutputFile) .. ' 2>&1'
         exitCode = LrTasks.execute(retryCmd)
         local retryFile = io.open(tempOutputFile, "r")
         if retryFile then
@@ -338,7 +343,18 @@ function ProcessAgent.analyzeWithPython(thumbPath, expectedFrames, originalPath,
     end
 
     if exitCode ~= 0 then
-      local err = string.format("检测引擎执行失败 (路径: %s, 退出码: %d)", exePath, exitCode)
+      local category = "运行时错误"
+      local lowerOutput = string.lower(output)
+      if lowerOutput:find("bad cpu type") or lowerOutput:find("exec format") then
+        category = "CPU 架构不兼容"
+      elseif lowerOutput:find("dyld") or lowerOutput:find("library not loaded") then
+        category = "系统版本或动态库不兼容"
+      elseif lowerOutput:find("code signing") or lowerOutput:find("operation not permitted") then
+        category = "签名或 Gatekeeper 阻止启动"
+      elseif lowerOutput:find("permission denied") or lowerOutput:find("cannot execute") then
+        category = "引擎没有执行权限"
+      end
+      local err = string.format("检测引擎执行失败 [%s] (路径: %s, 退出码: %d)", category, exePath, exitCode)
       if #output > 0 then err = err .. ": " .. string.sub(output, 1, 2000) end
       return nil, err
     end

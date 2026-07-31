@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build a self-contained Lightroom release.  The checksum and code signature
-# checks below detect accidental damage; they do not establish publisher identity.
+# Build a self-contained Lightroom release. A release build requires a real
+# Developer ID signature; ad-hoc signing is intentionally not a fallback.
 set -euo pipefail
 umask 077
 
@@ -9,7 +9,10 @@ cd "$SCRIPT_DIR"
 PLUGIN_DIR="NegativeCutter-135.lrplugin"
 PLUGIN_NAME="NegativeCutter-135"
 VERSION="$(python3 -c "import sys; sys.path.insert(0, '.'); from filmcrop import __version__; print(__version__)")"
-OUTPUT_ZIP="$(dirname "$SCRIPT_DIR")/${PLUGIN_NAME}-v${VERSION}.zip"
+TARGET_ARCH="${PYI_TARGET_ARCH:-$(uname -m)}"
+MIN_MACOS_VERSION="${NEGATIVECUTTER_MIN_MACOS_VERSION:-14.0}"
+SIGNING_IDENTITY="${NEGATIVECUTTER_DEVELOPER_ID_APPLICATION:-${CODESIGN_IDENTITY:-}}"
+OUTPUT_ZIP="${NEGATIVECUTTER_OUTPUT_ZIP:-$(dirname "$SCRIPT_DIR")/${PLUGIN_NAME}-v${VERSION}-macos-${TARGET_ARCH}.zip}"
 STAGE="${TMPDIR:-/tmp}/filmcrop-release-$$"
 EXTRACTED="$STAGE/extracted"
 FIXTURE_135="${NEGATIVECUTTER_RELEASE_135_FIXTURE:-$SCRIPT_DIR/../test_files/52191.tif}"
@@ -18,6 +21,34 @@ cleanup_failure() { rm -rf "$STAGE"; rm -f "$OUTPUT_ZIP"; }
 trap cleanup_failure ERR
 trap 'cleanup_failure; exit 1' INT TERM
 trap 'rm -rf "$STAGE"' EXIT
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--target-arch arm64|x86_64|universal2]
+
+Required for a release build: NEGATIVECUTTER_DEVELOPER_ID_APPLICATION.
+Optional: NEGATIVECUTTER_MIN_MACOS_VERSION (default: 14.0),
+NEGATIVECUTTER_TEAM_ID, NEGATIVECUTTER_OUTPUT_ZIP.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target-arch) TARGET_ARCH="${2:-}"; shift 2 ;;
+    --version) echo "NegativeCutter v${VERSION}"; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+case "$TARGET_ARCH" in arm64|x86_64|universal2) ;; *) echo "ERROR: unsupported target arch: $TARGET_ARCH" >&2; exit 2;; esac
+[[ -n "$SIGNING_IDENTITY" && "$SIGNING_IDENTITY" != "-" ]] || {
+  echo "BLOCKED: Developer ID Application identity is required; refusing ad-hoc release signing" >&2
+  exit 2
+}
+export MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS_VERSION"
+export PYI_TARGET_ARCH="$TARGET_ARCH"
+TEAM_ARGS=()
+if [[ -n "${NEGATIVECUTTER_TEAM_ID:-}" ]]; then TEAM_ARGS=(--team-id "$NEGATIVECUTTER_TEAM_ID"); fi
 
 [[ -f "$FIXTURE_135" && ! -L "$FIXTURE_135" ]] || { echo "ERROR: missing 135 release fixture: $FIXTURE_135" >&2; exit 1; }
 [[ -f "$FIXTURE_120" && ! -L "$FIXTURE_120" ]] || { echo "ERROR: missing 120 release fixture: $FIXTURE_120" >&2; exit 1; }
@@ -37,7 +68,10 @@ done
 # Never retain a previous release.
 rm -f "$OUTPUT_ZIP"
 python3 -m PyInstaller NegativeCutter.spec
-codesign --force --deep --sign - dist/NegativeCutter
+"$SCRIPT_DIR/../scripts/sign_macos_tree.sh" --root dist/NegativeCutter --identity "$SIGNING_IDENTITY"
+"$SCRIPT_DIR/../scripts/verify_macos_artifact.sh" --root dist/NegativeCutter \
+  --arch "$TARGET_ARCH" --min-macos "$MIN_MACOS_VERSION" \
+  "${TEAM_ARGS[@]}"
 if [[ -d dist/NegativeCutter && -x dist/NegativeCutter/NegativeCutter ]]; then
   rm -rf NegativeCutter
   ditto dist/NegativeCutter NegativeCutter
@@ -135,6 +169,19 @@ PY
 verify_manifest "$STAGE/$PLUGIN_DIR"
 codesign --verify --deep --strict "$STAGE/$PLUGIN_DIR/NegativeCutter"
 
+self_test() {
+  local plugin="$1" output
+  output="$("$plugin/NegativeCutter/NegativeCutter" --self-test)" || {
+    echo "ERROR: engine self-test failed: $output" >&2; exit 1;
+  }
+  python3 - "$output" <<'PY'
+import json, sys
+payload = json.loads(sys.argv[1])
+if payload.get("ok") is not True or payload.get("errorCode") != "OK":
+    raise SystemExit("ERROR: engine self-test contract failed: " + str(payload))
+PY
+}
+
 smoke() {
   local plugin="$1" fixture="$2" frames="$3" format="$4" output
   output="$("$plugin/NegativeCutter/NegativeCutter" "$fixture" --frames "$frames" --format "$format" --original "$fixture")"
@@ -184,6 +231,7 @@ PY
 # --frames 4 --format 645 --original.
 smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
 smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_120" 4 645
+self_test "$STAGE/$PLUGIN_DIR"
 render_smoke "$STAGE/$PLUGIN_DIR" "$FIXTURE_135"
 ARCHIVE_ROOT="$STAGE/archive-root"
 mkdir "$ARCHIVE_ROOT"
@@ -218,5 +266,6 @@ if not {'install.sh', 'NegativeCutter-135.lrplugin/RELEASE-MANIFEST.sha256'} <= 
 PY
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135" 6 35mm
 smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_120" 4 645
+self_test "$EXTRACTED/$PLUGIN_DIR"
 render_smoke "$EXTRACTED/$PLUGIN_DIR" "$FIXTURE_135"
 echo "Built $OUTPUT_ZIP"

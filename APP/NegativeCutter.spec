@@ -232,6 +232,6 @@ app = BUNDLE(
         'CFBundleShortVersionString': '2.4.7',
         'CFBundleVersion': '2.4.7',
         'NSHighResolutionCapable': True,
-        'LSMinimumSystemVersion': '11.0',
+        'LSMinimumSystemVersion': os.environ.get('NEGATIVECUTTER_MIN_MACOS_VERSION', '14.0'),
     },
 )

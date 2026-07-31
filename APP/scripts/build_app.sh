@@ -5,9 +5,12 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "${APP_DIR}/.." && pwd)"
 SPEC="${APP_DIR}/NegativeCutter.spec"
 ICON="${APP_DIR}/NegativeCutter.icns"
 TARGET_ARCH=""
+MIN_MACOS_VERSION="${NEGATIVECUTTER_MIN_MACOS_VERSION:-14.0}"
+SIGNING_IDENTITY="${NEGATIVECUTTER_DEVELOPER_ID_APPLICATION:-${CODESIGN_IDENTITY:-}}"
 
 VERSION=$(python3 - "${APP_DIR}" <<'PY'
 import sys
@@ -53,6 +56,11 @@ done
 
 echo "==> Building NegativeCutter v${VERSION}"
 
+[[ -n "$SIGNING_IDENTITY" && "$SIGNING_IDENTITY" != "-" ]] || {
+    echo "BLOCKED: Developer ID Application identity is required; refusing ad-hoc app signing" >&2
+    exit 2
+}
+
 # Validate target-arch if requested for universal2
 if [[ "$TARGET_ARCH" == "universal2" ]]; then
     echo "Checking universal2 dependency compatibility..."
@@ -88,6 +96,9 @@ if [[ -n "$TARGET_ARCH" ]]; then
 else
     echo "Building for default architecture ($(python3 -c 'import platform; print(platform.machine())'))"
 fi
+export MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS_VERSION"
+TEAM_ARGS=()
+if [[ -n "${NEGATIVECUTTER_TEAM_ID:-}" ]]; then TEAM_ARGS=(--team-id "$NEGATIVECUTTER_TEAM_ID"); fi
 
 # Generate the canonical icon beside the spec. The spec intentionally has no
 # cross-worktree fallback, so stale assets cannot enter the bundle.
@@ -117,9 +128,12 @@ if [[ ! -d "$APP_BUNDLE" ]]; then
     exit 1
 fi
 
-# Ad-hoc sign the bundle
 echo "Signing app bundle..."
-codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+"${ROOT}/scripts/sign_macos_tree.sh" --root "$APP_BUNDLE" --identity "$SIGNING_IDENTITY"
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
+"${ROOT}/scripts/verify_macos_artifact.sh" --root "$APP_BUNDLE" \
+    --arch "${TARGET_ARCH:-$(uname -m)}" --min-macos "$MIN_MACOS_VERSION" \
+    "${TEAM_ARGS[@]}"
 
 # Verify signature
 echo "Verifying signature..."
@@ -139,4 +153,4 @@ echo ""
 echo "To distribute:"
 echo "  zip -r -y NegativeCutter-v${VERSION}-macOS-${TARGET_ARCH:-arm64}.zip NegativeCutter.app"
 echo ""
-echo "  First-launch note: right-click → Open (Gatekeeper)"
+echo "  Distribute through the notarized PKG workflow; do not remove quarantine manually."

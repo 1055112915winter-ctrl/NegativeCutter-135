@@ -24,7 +24,10 @@ do
 done
 
 cd "$ROOT"
-python3 -m unittest tests.test_real_135_fixtures -v
+python3 -m unittest \
+  tests.test_real_135_fixtures \
+  tests.test_medium_format_pixel_accuracy \
+  -v
 PYTHONPATH=NegativeCutter-135.lrplugin python3 -m unittest discover \
   -s NegativeCutter-135.lrplugin/tests -p test_auto_frame_detection.py -v
 PYTHONPATH=NegativeCutter-135.lrplugin python3 -m unittest discover \
